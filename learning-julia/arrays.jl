@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.19.13
+# v0.19.14
 
 using Markdown
 using InteractiveUtils
@@ -34,7 +34,7 @@ This saves time and computation.\
 """
 
 # ╔═╡ 2294af6e-8003-436b-b790-78dcb2e8350e
-Array{Float32}(undef, 5)
+Array{Float32}(undef, (2, 3))
 
 # ╔═╡ 0a65e38e-0eff-40a4-bd56-9c3fc1494937
 # Column Vector (1D Array)
@@ -93,7 +93,7 @@ PLUTO_PROJECT_TOML_CONTENTS = """
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.8.0"
+julia_version = "1.8.2"
 manifest_format = "2.0"
 project_hash = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
 
