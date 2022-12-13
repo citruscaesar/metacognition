@@ -41,20 +41,67 @@ a, b, c = t
 # ╔═╡ 52e301d5-023c-4d79-ad61-6904a6f7c9ea
 md"""
 ### Named Tuples
-Named Tuples with a single entry 
-```(;key = value)``` to distinguish from a normal variable
+Named Tuples are constructed using a tuple of ```key = value```
+pairs. Ones with a single entry are written as ```(;key = value)``` 
+or ```(key = value,)```to distinguish from a normal variable.
 """
 
+# ╔═╡ b09fc60b-a058-4c68-b6c3-88c6cbf009d8
+(m = 5,)
+
 # ╔═╡ e7a4c99c-5ffc-4670-be7a-eb7e3e4e7c5a
-begin
-    nt = (
-        x = 1,
-        y = 2.5,
-        z = "text"
-    )
-    x, y = nt
-    x, y
+nt = (
+    x = 1,
+    y = 2.5,
+    z = "text"
+)
+
+# ╔═╡ 975704ff-a211-4323-b7e1-74e27064622b
+md"""
+There is a key difference between named tuples and dictionaries.😆
+The keys in a named tuple can only be an identifier, i.e. a name or a symbol,
+not a literal as in dictionaries. 
+"""
+
+# ╔═╡ c510f186-6a52-4fe8-981f-1a4775fdd401
+# Accssed by key value
+nt[2]
+
+# ╔═╡ 4208947d-5fe9-4420-bf48-57d27d69c491
+# Accessed by identifier
+nt.y
+
+# ╔═╡ 699d11af-611b-46bd-8dd3-0a6076d1b2dc
+md"""
+Named Tuples are an excellent placeholder for structs while writing prototype code.
+"""
+
+# ╔═╡ cc234b88-0c74-4515-ac18-a19285412f01
+# Constructs a Named Tuple with Parameters
+function person(name, age, height_in_meters)
+    return (name = name, age = age, height = height_in_meters)
 end
+
+# ╔═╡ cbfdf971-3573-4cb1-ac95-d5780351fedd
+# Constructs a Type with Parameters
+struct Person
+    name::AbstractString
+    age::Int8
+    height::Float16
+end
+
+# ╔═╡ 43ec35c5-e424-4906-b4b6-c439924a3cef
+#boi = person("Rohit", 15, 1.6)
+boi = Person("Rohit", 15, 1.6)
+
+# ╔═╡ 168cd614-8495-4d30-ad83-a24aa6ec54f7
+md"""
+The next cell will work for both the struct and the named tuple.
+"""
+
+# ╔═╡ ebd9c6f3-3fb6-496d-99f6-87e3bf5eef72
+#Print Details
+print("Hello, I am $(boi.name). I am $(boi.age) years old and $(boi.height * 100)cm tall.")
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -81,6 +128,16 @@ project_hash = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
 # ╟─b65c42ea-fb20-4f9f-a87e-11031b75b45c
 # ╠═3f814464-025f-4806-a371-2d612aed0355
 # ╟─52e301d5-023c-4d79-ad61-6904a6f7c9ea
+# ╠═b09fc60b-a058-4c68-b6c3-88c6cbf009d8
 # ╠═e7a4c99c-5ffc-4670-be7a-eb7e3e4e7c5a
+# ╟─975704ff-a211-4323-b7e1-74e27064622b
+# ╠═c510f186-6a52-4fe8-981f-1a4775fdd401
+# ╠═4208947d-5fe9-4420-bf48-57d27d69c491
+# ╠═699d11af-611b-46bd-8dd3-0a6076d1b2dc
+# ╠═cc234b88-0c74-4515-ac18-a19285412f01
+# ╠═cbfdf971-3573-4cb1-ac95-d5780351fedd
+# ╠═43ec35c5-e424-4906-b4b6-c439924a3cef
+# ╟─168cd614-8495-4d30-ad83-a24aa6ec54f7
+# ╠═ebd9c6f3-3fb6-496d-99f6-87e3bf5eef72
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
