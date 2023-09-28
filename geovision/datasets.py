@@ -129,7 +129,7 @@ class ResiscDataModule(pl.LightningDataModule):
                             num_workers = self.params.num_workers))
 
     def test_dataloader(self):
-        return (torch.utils.data
+        return (torch.utils.data 
                 .DataLoader(self.test_dp, batch_size = self.params.batch_size,
                             num_workers = self.params.num_workers))
     

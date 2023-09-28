@@ -3,7 +3,10 @@ from dataclasses import dataclass, asdict
 @dataclass(frozen = True, repr = True)
 class Hyperparameters:
     task: str
+    random_seed: int
+
     num_classes: int
+    test_split: float
     metrics: list[str]
 
     learning_rate: float

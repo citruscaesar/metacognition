@@ -59,4 +59,4 @@ class ImageResizer(IterDataPipe):
     def __iter__(self):
         for image, annotation in self.src_dp:
             yield (torchvision.transforms
-                   .Resize(self.resize_to, antialias=True)(image), annotation)
+                   .Resize(self.resize_to, antialias = True)(image), annotation) # type: ignore
