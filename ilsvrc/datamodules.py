@@ -12,8 +12,8 @@ from torch.utils.data import DataLoader
 
 import torchvision.transforms.v2 as t
 
-from pytorch_lightning import LightningDataModule
-from typing import Callable, Any
+from lightning import LightningDataModule
+from typing import Callable
 from hyperparameters import Hyperparameters
 
 from torchvision import disable_beta_transforms_warning
@@ -45,19 +45,18 @@ class ImageDataLoader(IterDataPipe):
         return torch.from_numpy(image.transpose(2, 0, 1))
 
     def _encode_label(self, label) -> torch.Tensor:
-        return torch.from_numpy(
-            self.le.transform([label])
-        ).squeeze()
+        return torch.tensor(
+            self.le.transform([label])[0], #type: ignore
+        dtype = torch.long)
     
     def _default_transform(self, image: torch.Tensor) -> torch.Tensor:
         transform = t.Compose([
             t.Resize((256, 256), antialias=True),
-            t.ConvertDtype(torch.float32),
+            t.ToDtype(torch.float32),
         ])
         return transform(image / 255)
 
-
-class ImagenetteDataLoader(LightningDataModule):
+class ImagenetteDataModule(LightningDataModule):
     def __init__(self, root: Path, params: Hyperparameters):
         super().__init__()
         self.root = root
@@ -83,6 +82,8 @@ class ImagenetteDataLoader(LightningDataModule):
             dataset = self.train_dp, 
             batch_size = self.params.batch_size,
             num_workers = self.params.num_workers,
+            persistent_workers = True,
+            pin_memory = True,
             shuffle = True
             )
     
