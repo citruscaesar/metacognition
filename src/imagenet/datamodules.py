@@ -1,4 +1,8 @@
+import requests
+import tarfile
+
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -18,6 +22,8 @@ from hyperparameters import Hyperparameters
 
 from torchvision import disable_beta_transforms_warning
 disable_beta_transforms_warning()
+
+from tqdm import tqdm
 
 class ImageDataLoader(IterDataPipe):
     def __init__(self, 
@@ -57,19 +63,32 @@ class ImageDataLoader(IterDataPipe):
         return transform(image / 255)
 
 class ImagenetteDataModule(LightningDataModule):
-    def __init__(self, root: Path, params: Hyperparameters):
+    def __init__(self, root: Path, params: Hyperparameters, transform: Callable | None = None):
         super().__init__()
         self.root = root
-        self._prepare_dataframes()
+        if self._is_empty_dir(self.root):
+            self.root.mkdir(parents = True, exist_ok=True)
+            self.prepare_data()
         self.params = params
+        self.transform = transform
+
+    def prepare_data(self) -> None:
+        url = "https://s3.amazonaws.com/fast-ai-imageclas/imagenette2.tgz"  
+        print("Root is Empty, Downloading Dataset")
+        archive: Path = self.root / "archive.tgz"
+        self._download_from_url(url, archive)
+        print("Extracting Dataset")
+        self._extract_tgz(archive, self.root)
+        archive.unlink(missing_ok=True)
     
     def setup(self, stage: str):
+        self._prepare_local()
         if stage == "fit":
             self.train_dp = self._datapipe_from_dataframe(self.train_df)
             # Sharding Filter, Prefetcher, Pinned Memory
             self.train_dp = (self.train_dp
                                 .shuffle(buffer_size=len(self.train_df)))
-            self.train_dp = ImageDataLoader(self.train_dp, self.label_encoder) #type:ignore 
+            self.train_dp = ImageDataLoader(self.train_dp, self.label_encoder, self.transform) #type:ignore 
             self.train_dp = self.train_dp.set_length(len(self.train_df))
 
         elif stage == "test":
@@ -94,7 +113,8 @@ class ImagenetteDataModule(LightningDataModule):
             num_workers = self.params.num_workers,
             )
 
-    def _prepare_dataframes(self) -> None:
+    def _prepare_local(self) -> None:
+        self.root = self.root / "imagenette2"
         df = pd.read_csv(self.root/"noisy_imagenette.csv")
         df["label"] = df["noisy_labels_0"]
         df["path"] = df["path"].apply(lambda x: self.root / x)
@@ -112,6 +132,29 @@ class ImagenetteDataModule(LightningDataModule):
     
     def _prepare_label_encoder(self, class_names: list):
         self.label_encoder = LabelEncoder().fit(sorted(class_names))
+
+    def _download_from_url(self, url: str, local_filename: Path) -> None:
+        response = requests.head(url)
+        file_size = int(response.headers.get("Content-Length", 0))
+
+        with requests.get(url, stream=True) as response:
+            with open(local_filename, "wb") as output_file:
+                with tqdm(
+                    total=file_size, unit="B", unit_scale=True, unit_divisor=1024
+                ) as progress_bar:
+                    for data in response.iter_content(chunk_size=1024*1024):
+                        output_file.write(data)
+                        progress_bar.update(len(data))
+    
+    def _extract_tgz(self, tgz_file, out_dir): 
+        with tarfile.open(tgz_file, "r:gz") as tar:
+            tar.extractall(out_dir)
+        
+    def _is_empty_dir(self, path: Path) -> bool:
+        if not path.is_dir():
+            print("Isn't even a dir")
+            return False
+        return not bool(list(path.iterdir()))
 
 def viz_batch(batch: tuple[torch.Tensor, torch.Tensor], le: LabelEncoder) -> None:
     images, targets = batch
