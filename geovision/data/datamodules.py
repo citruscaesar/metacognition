@@ -1,228 +1,267 @@
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import LabelEncoder
 
-from torchdata.datapipes.iter import (IterableWrapper, 
-                                      Zipper, 
-                                      Shuffler, 
-                                      Prefetcher, 
-                                      LengthSetter)
-
-from torch.utils.data import Dataset, DataLoader
-import torchvision.transforms.v2 as t
-
+### External Modules ###
+from pathlib import Path
 from lightning import LightningDataModule
 
+### Custom Modules ###
+from data.dataloaders import DataLoaderFactory
+from etl.etl import validate_dir 
+from etl.etl import is_valid_remote, is_valid_path, get_local_path_from_remote
 
-from data.datapipes import ClassificationIterDataPipe 
+### Type Hints ###
+from typing import Any, Literal, Optional, Callable
+from lightning.pytorch.utilities.types import (
+    EVAL_DATALOADERS, 
+    TRAIN_DATALOADERS
+)
+from torchvision.transforms.v2 import Transform
+from pandas import DataFrame
 
-from typing import Any, Optional 
-from numpy.typing import NDArray
+class ImageDatasetDataModule(LightningDataModule):
+    def __init__(
+            self, 
+            root: Path | str,
+            dataset_constructor: Callable,
+            is_remote: bool,  
+            is_streaming: bool,
 
-class ClassificationDataModule(LightningDataModule):
-    # 1. ds is stored locally, has a predefined torchvision.dataset
-    # 2. ds is stored locally, does not have a predefined torchvision.dataset but has a predefined dataframe
-    # 3. ds is stored locally, does not have a predefined torchvision.dataset and does not have a predefined dataframe
-    # 4. ds is stored remotely or sharded -> must provide seprately defined torchvision.dataset -> use kwargs for parameters 
-
-    #datamodule hyperparameters to be stored:
-        #dataset_name: str, to call appropriate etl functions
-        #eval_split: str, description of the train-val-test split strategy
-        #num_workers: int
-        #batch_size: int
-        #grad_accum: int
-
-    image_extns = ["JPEG", "jpg", "tif", "png"]
-    
-    def __init__(self, 
-                 root: str | Path, 
-                 is_remote: bool = False,
-                 is_sharded: bool = False,
-                 val_split: float = 0.25,
-                 dataset: Optional[Dataset] = None,
-                 dataframe: Optional[str | Path | pd.DataFrame] = None,
-                 bands: Optional[tuple[int,...]] = None,
-                 image_transform : Optional[t.Transform] = None,
-                 etl_utils: Optional[Any] = None,
-                 viz_utils: Optional[Any] = None,
-                 **kwargs) -> None:
-
-        super().__init__()
-
+            band_combination: Optional[tuple[int, ...]] = None,
+            image_transform: Optional[Transform] = None,
+            target_transform: Optional[Transform] = None,
+            common_transform: Optional[Transform] = None,
+            **kwargs,
+            ) -> None:
+        
         self.is_remote = is_remote
-        if self.is_remote:
-            #root is a url, e.g. s3://bucket_name/shards/dataset_name/split
-            self.root = root
-            assert dataset is not None, "must provide dataset for remote files"
-            print(self.root)
-        else:
-            #root is a local path
-            self.root = self.__check_root(root)
+        self.is_streaming = is_streaming
+        self.dataset_constructor = dataset_constructor
 
-        self.dataframe = dataframe
-        self.dataset = dataset 
-        self.is_sharded = is_sharded
-        self.val_split = val_split
-        self.bands = bands
+        if self.is_remote:
+            assert is_valid_remote(root), "Invalid URL" # type: ignore
+            self.remote_url = root
+            self.local_path = get_local_path_from_remote(root) # type: ignore
+
+        else:
+            # TODO : return validated path
+            assert is_valid_path(root), "Path Does Not Exist"
+            self.local_path = root # type: ignore
+
+        self.band_combination = band_combination
         self.image_transform = image_transform
-        self.etl_utils = etl_utils
-        self.viz_utils = viz_utils
-        #TODO: set streaming kwargs as an attribute
+        self.target_transform = target_transform
+        self.common_transform = common_transform
 
         self.dataset_name = kwargs.get("dataset_name", "")
         self.task = kwargs.get("task", "")
         self.eval_split = kwargs.get("eval_split", "")
         self.num_workers = kwargs.get("num_workers", 1)
         self.batch_size = kwargs.get("batch_size", 32) // kwargs.get("grad_accum", 1)
+        if is_streaming:
+            self.predownload = kwargs.get("predownload")
+            self.cache_limit = kwargs.get("cache_limit")
         self.save_hyperparameters("dataset_name", "eval_split", "batch_size", "grad_accum")
 
+        self.data_loaders = DataLoaderFactory(self.batch_size, self.num_workers)
+
     def prepare_data(self):
-        if not self.is_remote and self.__is_empty(self.root):
-            print("Dataset Directory Empty")
-            print("Downloading Dataset")
-            if self.dataset is not None:
-                self.dataset(root = self.root, download = True) #type: ignore
-            elif self.etl_utils is not None:
-                self.etl_utils.download_dataset(self.dataset_name)
-            else:
-                print("ETL Utils Not Provided")
+        # if not self.is_remote and not self.is_streaming:
+            # if is_empty(self.local_path):
+                # self.dataset_constructor.download() # type: ignore
+                # or
+                # etl.dataset_downloader(self.dataset_name)
+        pass
 
     def setup(self, stage: str):
         assert stage in ("fit", "validate", "test", "predict"), f"{stage} is invalid"
 
-        if self.dataset:
+        # TODO: Consider writing, if stage in ("fit", "validate") self.val dataset to reduce lines of code
+
+        if self.is_remote and self.is_streaming:
             if stage == "fit":
-                self.train_dataset = self.__prepare_train_dataset()
-                self.val_dataset = self.__prepare_val_dataset()
-
-            elif stage in ("validate", "test", "predict"):
-                self.val_dataset = self.__prepare_val_dataset() 
-
-        elif self.dataframe is not None:
-            if isinstance(self.dataframe, (str, Path)):
-                self.dataframe = pd.read_csv(self.dataframe)
-            self.__prepare_label_encoder(self.dataframe.label.unique())  # type: ignore
+                self.train_dataset = self.__setup_remote_streaming_train_dataset()
+                self.val_dataset = self.__setup_remote_streaming_val_dataset()
+            elif stage == "validate":
+                self.val_dataset = self.__setup_remote_streaming_val_dataset()
+            elif stage == "test":
+                #TODO : figure out how to check for test split
+                self.test_dataset = self.__setup_remote_streaming_val_dataset()
+        
+        elif not self.is_remote and self.is_streaming:
             if stage == "fit":
-                self.train_dataset = self.__prepare_datapipe(self.dataframe, split = "train")
-                self.val_dataset = self.__prepare_datapipe(self.dataframe, split = "val")
-            elif stage in ("validate", "test", "predict"):
-                self.val_dataset = self.__prepare_datapipe(self.dataframe, split = "val")
+                self.train_dataset = self.__setup_local_streaming_train_dataset()
+                self.val_dataset = self.__setup_local_streaming_val_dataset()
+            elif stage == "validate":
+                self.val_dataset = self.__setup_local_streaming_val_dataset()
+            elif stage == "test":
+                #TODO : figure out how to check for test split
+                self.test_dataset = self.__setup_local_streaming_val_dataset()
+ 
+        elif not self.is_remote and not self.is_streaming:
+            if stage == "fit":
+                self.train_dataset = self.__setup_local_train_dataset()
+                self.val_dataset = self.__setup_local_val_dataset()
+            elif stage == "validate":
+                self.val_dataset = self.__setup_local_val_dataset()
+            elif stage == "test":
+                #TODO : figure out how to check for test split
+                self.test_dataset = self.__setup_local_val_dataset()
 
+    def train_dataloader(self) -> TRAIN_DATALOADERS:
+        if self.is_remote or self.is_streaming:
+            return self.data_loaders.train_dataloader(self.train_dataset)
+        return self.data_loaders.streaming_train_dataloader(self.train_dataset)
+    
+    def val_dataloader(self) -> EVAL_DATALOADERS:
+        if self.is_remote or self.is_streaming:
+            return self.data_loaders.eval_dataloader(self.val_dataset)
+        return self.data_loaders.streaming_eval_dataloader(self.val_dataset)
+
+    def test_dataloader(self) -> EVAL_DATALOADERS:
+        if hasattr(self, "test_dataset"):
+            eval_dataset = self.test_dataset
         else:
-            self.dataframe = self.__prepare_dataframe()
-            self.__prepare_label_encoder(self.dataframe.label.unique())  # type: ignore
-            if stage == "fit":
-                self.train_dataset = self.__prepare_datapipe(self.dataframe, split = "train")
-                self.val_dataset = self.__prepare_datapipe(self.dataframe, split = "val")
-            elif stage in ("validate", "test", "predict"):
-                self.val_dataset = self.__prepare_datapipe(self.dataframe, split = "val")
+            eval_dataset = self.val_dataset
 
-    def train_dataloader(self) -> DataLoader:
-        if self.is_remote or self.is_sharded: 
-            return self.__remote_train_dataloader()
-        return self.__local_train_dataloader()
+        if self.is_remote or self.is_streaming:
+            return self.data_loaders.eval_dataloader(eval_dataset)
+        return self.data_loaders.streaming_eval_dataloader(eval_dataset)
 
-    def val_dataloader(self) -> DataLoader:
-        if self.is_remote or self.is_sharded: 
-            return self.__remote_eval_dataloader()
-        return self.__local_eval_dataloader()
+    def __get_streaming_kwargs(self) -> dict[str, Any]:
+        return {
+            "batch_size": self.batch_size,
+            "band_combination": self.band_combination,
+            "predownload": self.predownload,
+            "cache_limit": self.cache_limit,
+            "image_transform": self.image_transform,
+            "target_transform": self.target_transform,
+            "common_transform": self.common_transform
+        }
 
-    def test_dataloader(self) -> DataLoader:
-        if self.is_remote or self.is_sharded:  
-            return self.__remote_eval_dataloader()
-        return self.__local_eval_dataloader()
-
-    def predict_dataloader(self) -> DataLoader:
-        if self.is_remote or self.is_sharded: 
-            return self.__remote_eval_dataloader()
-        return self.__local_eval_dataloader()
-
-    def __prepare_train_dataset(self) -> Dataset:
-        return self.dataset(
-            root = self.root, 
-            split = "train", 
-            transform = self.image_transform,
-
-            #Streaming Kwargs
-            remote = self.root if self.is_remote else None,
-            local = self.__get_shards_path() if self.is_remote else self.root,
-            bands = self.bands,
+    def __setup_remote_streaming_train_dataset(self):
+        return self.dataset_constructor(
+            remote = self.remote_url,
+            local = self.local_path,
+            split = "train",
             shuffle = True,
-            batch_size = self.batch_size,
-            predownload = 10 * self.batch_size,
-            cache_limit = "10gb") # type: ignore
-
-    def __prepare_val_dataset(self) -> Dataset:
-        return self.dataset(
-            root = self.root,
+            **self.__get_streaming_kwargs()
+       )
+    
+    def __setup_remote_streaming_val_dataset(self):
+        return self.dataset_constructor(
+            remote = self.remote_url,
+            local = self.local_path,
             split = "val",
-            transform = self.image_transform, # type: ignore
-
-            #Streaming Kwargs
-            remote = self.root if self.is_remote else None,
-            local = self.__get_shards_path() if self.is_remote else self.root,
             shuffle = False,
-            bands = self.bands,
-            batch_size = self.batch_size,
-            predownload = 10 * self.batch_size,
-            cache_limit = "10gb")
+            **self.__get_streaming_kwargs()
+        )
 
-    def __local_train_dataloader(self) -> DataLoader:
-        return DataLoader(
-            dataset = self.train_dataset, 
-            batch_size = self.batch_size,
-            num_workers = self.num_workers,
-            persistent_workers = True,
-            pin_memory = True,
-            shuffle = True)
+    def __setup_local_streaming_train_dataset(self):
+        return self.dataset_constructor(
+            local = self.local_path,
+            split = "train",
+            shuffle = True,
+            **self.__get_streaming_kwargs()
+       )
+
+    def __setup_local_streaming_val_dataset(self):
+        return self.dataset_constructor(
+            local = self.local_path,
+            split = "val",
+            shuffle = False,
+            **self.__get_streaming_kwargs()
+       )
     
-    def __local_eval_dataloader(self) -> DataLoader:
-        #NOTE: if setting num workers, make sure
-        #      the entire dataset is returned only once 
-        return DataLoader(
-            dataset = self.val_dataset, 
-            batch_size = self.batch_size,
+    def __setup_local_train_dataset(self):
+        return self.dataset_constructor(
+            root = self.local_path,
+            split = "train",
+            image_transform = self.image_transform,
+            target_transform = self.target_transform,
+            common_transform = self.common_transform,
         )
 
-    def __remote_train_dataloader(self) -> DataLoader:
-        return DataLoader(
-            dataset = self.train_dataset,
-            batch_size = self.batch_size,
-            num_workers = self.num_workers,
+    def __setup_local_val_dataset(self):
+        return self.dataset_constructor(
+            root = self.local_path,
+            split = "val",
+            image_transform = self.image_transform,
+            target_transform = self.target_transform,
+            common_transform = self.common_transform,
         )
 
-    def __remote_eval_dataloader(self) -> DataLoader:
-        return DataLoader(
-            dataset = self.val_dataset,
-            batch_size = self.batch_size,
-        )
 
-    def __is_empty(self, dir: str | Path) -> bool:
-        dir = Path(dir)
-        return list(dir.iterdir()) == True
+class ImageDataframeDataModule(LightningDataModule):
+    def __init__(
+            self,
+            root: str | Path,
+            dataframe: Optional[str | Path | DataFrame] = None,
+            custom_train_val_test_split: tuple[float, ...] = (.75, .15, .10),
+            task : Literal["classification", "segmentation", "detection"] = "classification",
 
-    def __check_root(self, dir: str | Path) -> Path:
-        dir = Path(dir)
-        if not dir.is_dir():
-            dir.mkdir(parents = True)
-        return dir
+            band_combination: Optional[tuple[int, ...]] = None,
+            image_transform: Optional[Transform] = None,
+            target_transform: Optional[Transform] = None,
+            common_transform: Optional[Transform] = None,
+            **kwargs) -> None:
 
-    def __prepare_label_encoder(self, class_names: list | NDArray):
-        self.label_encoder = LabelEncoder().fit(sorted(class_names))
+        assert is_valid_path(root), "Path does not exist"
+        # TODO: return validated path
+        self.root = Path(root)
+        
+        
+        self.custom_train_val_test_split = custom_train_val_test_split
+        assert task in ("classification", "segmentation", "regresssion"), "ValueError: Invalid Task Value"
+        self.task = task 
+
+        self.band_combination = band_combination
+        self.image_transform = image_transform
+        self.target_transform = target_transform
+        self.common_transform = common_transform
+
+        self.dataset_name = kwargs.get("dataset_name", "")
+        self.eval_split = kwargs.get("eval_split", "")
+        self.num_workers = kwargs.get("num_workers", 1)
+        self.batch_size = kwargs.get("batch_size", 32) // kwargs.get("grad_accum", 1)
+        self.save_hyperparameters("dataset_name", "task", "eval_split", "batch_size", "grad_accum")
+
+        # If dataframe or its path has been provided, load it 
+        if isinstance(dataframe, str | Path):
+            self.dataframe = pd.read_csv(dataframe)
+        elif isinstance(dataframe, DataFrame):
+            self.dataframe = dataframe
+        
+        # If not, create dataframe based on standard imagefolder directory layout
+        else:
+            if self.task == "classification":
+                self.dataframe = self.__prepare_classification_dataframe()
+            elif self.task == "segmentation":
+                self.dataframe = self.__prepare_segmentation_dataframe()
+            elif self.task == "detection":
+                self.dataframe = self.__prepare_detection_dataframe()
+        assert isinstance(self.dataframe, DataFrame)
+            
+    def prepare_data(self):
+        pass    
+
+    def setup(self, stage):
+        assert stage in ("fit", "validate", "test", "predict"), f"{stage} is invalid"
+        if stage == "fit":
+            self.train_dataset = self.__setup_train_dataset()
+            self.val_dataset = self.__setup_val_dataset()
+        elif stage == "validate":
+            self.val_dataset = self.__setup_val_dataset()
+        elif stage == "test":
+            self.test_dataset = self.__setup_val_dataset()
     
-    def __prepare_dataframe(self) -> pd.DataFrame:
-        #generator of generators of paths for each file extension
-        #consider using np.fromiter(generator, np.dtype(object))
-        assert isinstance(self.root, Path)
-        pathgens = ((self.root.rglob(f"*.{e}")) for e in self.image_extns)
+    def __prepare_classification_dataframe(self):
+        image_extns = ["JPEG", "jpg", "tif", "png"]
 
-        df = pd.DataFrame(
-            data = {"path": [path for pathgen in pathgens for path in pathgen]}
-            #wtf?, its just a nested loop to flatten the lists into one 
-            #consider using np.flatten() for readibility and possibly speed
-        )
+        pathgens = ((self.root.rglob(f"*.{e}")) for e in image_extns)
+        # wtf?, its just a nested loop to flatten the lists into one 
+        # consider using np.flatten() for readibility and possibly speed
+        df = pd.DataFrame({"path": [path for pathgen in pathgens for path in pathgen]})
 
         df["path"] = df["path"].apply(lambda x: Path(x.parents[0].stem) / x.name)
         df["label"] = df["path"].apply(lambda x: x.parents[0].stem)
@@ -237,42 +276,19 @@ class ClassificationDataModule(LightningDataModule):
         train_df["split"] = np.full(len(train_df), "train") 
 
         df = pd.concat([train_df, val_df]).sort_values("label").reset_index(drop = True)
-        return df 
+        return df
 
-    def __datapipe_from_dataframe(self, df: pd.DataFrame) -> Any:
-        df["path"] = df["path"].apply(lambda x: self.root / x)
-        return Zipper(
-            IterableWrapper(df.path),
-            IterableWrapper(df.label),
-            IterableWrapper(df.name),
-        )
+    def __prepare_segmentation_dataframe(self):
+        pass
 
-    def __prepare_datapipe(self, df: pd.DataFrame, split: str):
-        assert split in ("train", "val"), f"{split} is invalid"
+    def __prepare_detection_dataframe(self):
+        pass
 
-        if split == "train":
-            df = df[df["split"] == "train"].reset_index(drop = True)
-            dp = self.__datapipe_from_dataframe(df)
-            dp = Shuffler(dp, buffer_size=len(df))
-            dp = ClassificationIterDataPipe(source_dp = dp, 
-                                         le = self.label_encoder,
-                                         image_transform=self.image_transform,
-                                         bands = self.bands)
-            dp = Prefetcher(dp, buffer_size=self.batch_size)
-            dp = LengthSetter(dp, len(df))
+    def __setup_train_dataset(self):
+        pass
 
-        else:
-            df = df[df["split"] == "val"].reset_index(drop = True)
-            dp = self.__datapipe_from_dataframe(df)
-            dp = ClassificationIterDataPipe(source_dp = dp, 
-                                         le = self.label_encoder,
-                                         image_transform=self.image_transform,
-                                         bands = self.bands)
-            dp = Prefetcher(dp, buffer_size=self.batch_size)
-            dp = LengthSetter(dp, len(df))
+    def __setup_val_dataset(self):
+        pass
 
-        return dp
-
-    def __get_shards_path(self) -> Path:
-        assert isinstance(self.root, str)
-        return Path.home() / ('/'.join(Path(self.root.split("//")[-1]).parts[1:]))
+    def __setup_test_dataset(self):
+        pass
