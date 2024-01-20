@@ -8,7 +8,13 @@ from lightning import LightningDataModule
 ### Custom Modules ###
 from data.dataloaders import DataLoaderFactory
 from etl.etl import validate_dir 
-from etl.etl import is_valid_remote, is_valid_path, get_local_path_from_remote
+from etl.etl import (
+    validate_dir,
+    is_empty,
+    is_valid_remote, 
+    is_valid_path,
+    get_local_path_from_remote,
+)
 
 ### Type Hints ###
 from typing import Any, Literal, Optional, Callable
@@ -33,7 +39,7 @@ class ImageDatasetDataModule(LightningDataModule):
             common_transform: Optional[Transform] = None,
             **kwargs,
             ) -> None:
-        
+
         self.is_remote = is_remote
         self.is_streaming = is_streaming
         self.dataset_constructor = dataset_constructor
@@ -55,23 +61,26 @@ class ImageDatasetDataModule(LightningDataModule):
 
         self.dataset_name = kwargs.get("dataset_name", "")
         self.task = kwargs.get("task", "")
-        self.eval_split = kwargs.get("eval_split", "")
+        self.random_seed = kwargs.get("random_seed", 42)
+        self.eval_split = kwargs.get("eval_split", .25)
         self.num_workers = kwargs.get("num_workers", 1)
         self.batch_size = kwargs.get("batch_size", 32) // kwargs.get("grad_accum", 1)
         if is_streaming:
             self.predownload = kwargs.get("predownload")
             self.cache_limit = kwargs.get("cache_limit")
-        self.save_hyperparameters("dataset_name", "eval_split", "batch_size", "grad_accum")
-
+        #self.save_hyperparameters()
+        #self.save_hyperparameters("dataset_name", "eval_split", "batch_size", "grad_accum")
         self.data_loaders = DataLoaderFactory(self.batch_size, self.num_workers)
 
+        super().__init__()
+
     def prepare_data(self):
-        # if not self.is_remote and not self.is_streaming:
-            # if is_empty(self.local_path):
-                # self.dataset_constructor.download() # type: ignore
-                # or
-                # etl.dataset_downloader(self.dataset_name)
-        pass
+        if not self.is_remote and not self.is_streaming:
+            if is_empty(self.local_path):
+                print("Preparing_Data")
+                self.dataset_constructor(
+                    download = True, **self.__get_local_kwargs()
+                ) # type: ignore
 
     def setup(self, stage: str):
         assert stage in ("fit", "validate", "test", "predict"), f"{stage} is invalid"
@@ -81,32 +90,26 @@ class ImageDatasetDataModule(LightningDataModule):
         if self.is_remote and self.is_streaming:
             if stage == "fit":
                 self.train_dataset = self.__setup_remote_streaming_train_dataset()
+            if stage in ("fit", "validate"):
                 self.val_dataset = self.__setup_remote_streaming_val_dataset()
-            elif stage == "validate":
-                self.val_dataset = self.__setup_remote_streaming_val_dataset()
-            elif stage == "test":
-                #TODO : figure out how to check for test split
-                self.test_dataset = self.__setup_remote_streaming_val_dataset()
+            if stage == "test":
+                self.test_dataset = self.__setup_remote_streaming_test_dataset()
         
         elif not self.is_remote and self.is_streaming:
             if stage == "fit":
                 self.train_dataset = self.__setup_local_streaming_train_dataset()
+            if stage in ("fit", "validate"):
                 self.val_dataset = self.__setup_local_streaming_val_dataset()
-            elif stage == "validate":
-                self.val_dataset = self.__setup_local_streaming_val_dataset()
-            elif stage == "test":
-                #TODO : figure out how to check for test split
-                self.test_dataset = self.__setup_local_streaming_val_dataset()
+            if stage == "test":
+                self.test_dataset = self.__setup_local_streaming_test_dataset()
  
         elif not self.is_remote and not self.is_streaming:
             if stage == "fit":
                 self.train_dataset = self.__setup_local_train_dataset()
-                self.val_dataset = self.__setup_local_val_dataset()
-            elif stage == "validate":
+            if stage in ("fit", "validate"):
                 self.val_dataset = self.__setup_local_val_dataset()
             elif stage == "test":
-                #TODO : figure out how to check for test split
-                self.test_dataset = self.__setup_local_val_dataset()
+                self.test_dataset = self.__setup_local_test_dataset()
 
     def train_dataloader(self) -> TRAIN_DATALOADERS:
         if self.is_remote or self.is_streaming:
@@ -139,6 +142,16 @@ class ImageDatasetDataModule(LightningDataModule):
             "common_transform": self.common_transform
         }
 
+    def __get_local_kwargs(self) -> dict[str, Any]:
+        return {
+            "root": self.local_path,
+            "random_seed": self.random_seed,
+            "eval_split": self.eval_split,
+            "image_transform": self.image_transform,
+            "target_transform": self.target_transform,
+            "common_transform": self.common_transform
+        }
+
     def __setup_remote_streaming_train_dataset(self):
         return self.dataset_constructor(
             remote = self.remote_url,
@@ -153,6 +166,15 @@ class ImageDatasetDataModule(LightningDataModule):
             remote = self.remote_url,
             local = self.local_path,
             split = "val",
+            shuffle = False,
+            **self.__get_streaming_kwargs()
+        )
+
+    def __setup_remote_streaming_test_dataset(self):
+        return self.dataset_constructor(
+            remote = self.remote_url,
+            local = self.local_path,
+            split = "test",
             shuffle = False,
             **self.__get_streaming_kwargs()
         )
@@ -172,25 +194,32 @@ class ImageDatasetDataModule(LightningDataModule):
             shuffle = False,
             **self.__get_streaming_kwargs()
        )
+
+    def __setup_local_streaming_test_dataset(self):
+        return self.dataset_constructor(
+            local = self.local_path,
+            split = "test",
+            shuffle = False,
+            **self.__get_streaming_kwargs()
+       )
     
     def __setup_local_train_dataset(self):
         return self.dataset_constructor(
-            root = self.local_path,
             split = "train",
-            image_transform = self.image_transform,
-            target_transform = self.target_transform,
-            common_transform = self.common_transform,
+            **self.__get_local_kwargs(),
         )
 
     def __setup_local_val_dataset(self):
         return self.dataset_constructor(
-            root = self.local_path,
             split = "val",
-            image_transform = self.image_transform,
-            target_transform = self.target_transform,
-            common_transform = self.common_transform,
+            **self.__get_local_kwargs(),
         )
 
+    def __setup_local_test_dataset(self):
+        return self.dataset_constructor(
+            split = "test",
+            **self.__get_local_kwargs(),
+        )
 
 class ImageDataframeDataModule(LightningDataModule):
     def __init__(

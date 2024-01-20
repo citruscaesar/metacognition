@@ -1,0 +1,6 @@
+task: segmentation
+num_classes: 3
+loss: cross_entropy
+learning_rate: 1.0e-05
+momentum: 0
+weight_decay: 0
