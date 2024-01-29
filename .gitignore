@@ -1,5 +1,6 @@
-# Lightning
+# Logs 
 lightning_logs/
+logs/
 *.ckpt
 
 # Byte-compiled / optimized / DLL files
@@ -9,6 +10,7 @@ __pycache__/
 
 # C extensions
 *.so
+*.out
 
 # Distribution / packaging
 .Python

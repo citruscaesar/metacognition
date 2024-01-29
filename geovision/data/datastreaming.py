@@ -24,10 +24,10 @@ class ClassificationStreamingDataset(StreamingDataset):
         assert split in ("train", "val"), f"{split} is invalid"
 
         self.image_loader = ImageLoader(
-            bands = kwargs.get("band_combination"),
+            band_combination = kwargs.get("band_combination"),
             image_transform = image_transform,
-            #target_transform = target_transform,
-            #common_transform = common_transform
+            target_transform = target_transform,
+            common_transform = common_transform
         )
 
         clean_stale_shared_memory()

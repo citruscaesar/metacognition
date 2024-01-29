@@ -1,6 +1,4 @@
 from pathlib import Path
-from re import M
-from aenum import constant
 from torch import Tensor
 from pandas import DataFrame, concat
 
@@ -26,6 +24,7 @@ class OxfordIIITPetSegmentation(OxfordIIITPet):
     def __init__(
             self,
             root: Path,
+            dataframe: Optional[DataFrame] = None,
             split: Literal["train", "val", "test"] = "train",
             eval_split: float = 0.2,
             random_seed: int = 42,
@@ -38,14 +37,26 @@ class OxfordIIITPetSegmentation(OxfordIIITPet):
 
         self.root = root
         if download:
-            for url, md5 in self._RESOURCES:
-                download_and_extract_archive(url, download_root=self.root.as_posix(), md5=md5)
+            for url, md5 in self.RESOURCES:
+                download_and_extract_archive(url, download_root = root.parent.as_posix(), md5=md5)
+                self.root = root.parent / "oxford-iiit-pet"
+                print(f"Root directory changed to : {self.root}")
 
+        assert self.root.is_dir(), "Root Does Not Exist"
+
+        assert split in ("train", "val", "test"), "Invalid Split"
         self.split = split 
         self.eval_split = eval_split
         self.random_seed = random_seed
-        self.dataframe = self.__imagefolder_dataframe()
-        self.dataframe = self.__subset_dataframe()
+    
+        if dataframe is None:
+            self.dataframe = self.get_and_save_dataframe()
+        else:
+            assert isinstance(dataframe, DataFrame)
+            self.dataframe = dataframe
+
+        self.__subset_dataframe()
+        self.__prepend_root_to_dataframe()
 
         self.image_loader = ImageLoader(
             num_classes=3,
@@ -63,10 +74,14 @@ class OxfordIIITPetSegmentation(OxfordIIITPet):
             self.dataframe.iloc[idx]["mask"]
         ) # type: ignore
 
-    def __imagefolder_dataframe(self) -> DataFrame:
+    def get_and_save_dataframe(self, dest_path = Path.cwd()) -> DataFrame:
         df = DataFrame({"image": (self.root/"images").rglob("*.jpg")})
+
+        df["image"] = df["image"].apply(
+            lambda x: Path(x.parent.stem, x.name) # type: ignore
+        ) 
         df["mask"] = df["image"].apply(
-            lambda x: (self.root/"annotations"/"trimaps"/f"{x.stem}.png") # type: ignore
+            lambda x: Path("annotations", "trimaps", f"{x.stem}.png") # type: ignore
         )
 
         # Drop Bad Images
@@ -100,17 +115,15 @@ class OxfordIIITPetSegmentation(OxfordIIITPet):
 
         df = concat([train, val, test]).reset_index(drop = True)
         df = df.drop("name", axis = 1)
+        df.to_csv(dest_path/"oxford-iiit-pets-train-val-test-split.csv", index = False)
         return df
     
-    def __subset_dataframe(self) -> DataFrame:
-        return self.dataframe[self.dataframe["split"] == self.split].reset_index(drop=True) 
+    def __subset_dataframe(self):
+        self.dataframe = (self.dataframe
+                          [self.dataframe["split"] == self.split]
+                          .reset_index(drop=True))
     
-    def __find_and_assign_root(self, root: Path) -> Path | None:
-        DATASET_NAME = "oxford-iiit-pet"
-        if root.stem == DATASET_NAME:
-            return root
-        else:
-            for subdir in (x for x in root.rglob("*") if x.is_dir()):
-                if subdir.stem == DATASET_NAME:
-                    return subdir
-        return None 
+    def __prepend_root_to_dataframe(self):
+        prepend_root_func = lambda x: self.root / x 
+        self.dataframe["image"] = self.dataframe["image"].apply(prepend_root_func)
+        self.dataframe["mask"] = self.dataframe["mask"].apply(prepend_root_func)

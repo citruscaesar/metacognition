@@ -201,7 +201,6 @@ class SegmentationTask(LightningModule):
 
         preds = torch.argmax(preds, 1).to(torch.int64)
         masks = torch.argmax(masks, 1).to(torch.int64)
-
         self.val_metrics.update(preds, masks) 
 
         self.log("val_loss", loss, on_epoch=True)
@@ -240,7 +239,7 @@ class SegmentationTask(LightningModule):
         self.test_confusion_matrix.reset()
 
     def configure_optimizers(self):
-        assert self.optimizer is not None, "optimizer is None" 
+        assert self.optimizer is not None, "OptimizerFactory returned None" 
         return self.optimizer(
             params = self.model.parameters(),
             lr = self.learning_rate,
@@ -292,6 +291,7 @@ class SegmentationTask(LightningModule):
         self.val_metrics = _metrics.clone(prefix = "val_")
         self.val_cohen_kappa = _cohen_kappa.clone()
         self.val_confusion_matrix = _confusion_matrix.clone()
+
         self.test_metrics = _metrics.clone(prefix = "test_")
         self.test_cohen_kappa = _cohen_kappa.clone()
         self.test_confusion_matrix = _confusion_matrix.clone()

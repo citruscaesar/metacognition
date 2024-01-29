@@ -1,12 +1,17 @@
 #include <stdio.h> 
-#include <stdint.h>
+#include <stdlib.h>
+#define iter(i, l) for(size_t i = 0; i < l; ++i)
 
-void readArray(int64_t* array, size_t len);
-void printArray(int64_t* array, size_t len);
-void readMatrix(int64_t* matrix, size_t nrows, size_t ncols);
-void printMatrix(int64_t* matrix, size_t nrows, size_t ncols);
+typedef signed long int i64;
+
+void readArray(i64*, size_t);
+void printArray(i64*, size_t);
+void readMatrix(i64**, size_t, size_t);
+void printMatrix(i64**, size_t , size_t);
+void deleteMatrix(i64**, size_t , size_t);
 
 int main(){
+
     size_t nrows, ncols;
     //printf("Enter Matrix Rows and Columns: ");
     //scanf("%d", &nrows);
@@ -14,57 +19,49 @@ int main(){
     nrows = 2;
     ncols = 2;
 
-    int64_t matrix[nrows][ncols];
+    i64* matrix[nrows];
+
+    // matrix = {i64* ptr_to_row1, i64* ptr_to_row2}
+    // temp_row = {i64 num1, i64 num2, ...}
+    // temp_row = &num1
+    // ptr_to_row1 = temp_row = &num1 
+
     readMatrix(matrix, nrows, ncols);
-
-    printf("[");
-    for(size_t r = 0; r < nrows; ++r){
-        for(size_t c = 0; c < ncols; ++c){
-            printf("%2d", matrix[r][c]);
-            if (c != ncols-1)
-                printf(" ");
-        }
-        if (r != nrows-1){printf("\n ");}
-    }
-    printf("]");
-
-    return 0;
+    printMatrix(matrix, nrows, ncols);
 }
 
-void printArray(int64_t* array, size_t len){
+void readArray(i64* array, size_t len){
+    for(size_t i = 0; i<len; ++i)
+        scanf("%lld", &array[i]);
+}
+
+void printArray(i64* array, size_t len){
     printf("[");
     for(size_t i = 0; i<len; ++i){
-        printf("%d", array[i]);
-        if (i != len-1)
-            printf(" ");
+        printf("%2lld", array[i]);
+        if (i != len-1) {printf(" ");}
     }
     printf("]");
 }
 
-void readArray(int64_t* array, size_t len){
-    for(size_t i = 0; i<len; ++i)
-        scanf("%d", &array[i]);
-}
-
-void readMatrix(int64_t** matrix, size_t nrows, size_t ncols){
-    for(size_t r = 0; r < nrows; ++r){
-        for(size_t c = 0; c < ncols; ++c){
-            //printf("(%d, %d)\n", r, c);
-            scanf("%d", &matrix[r][c]);
-        }
+void readMatrix(i64** matrix, size_t nrows, size_t ncols){
+    for(size_t r = 0; r<nrows; r++){
+        matrix[r] = (i64*)calloc(ncols, sizeof(i64));
+        readArray(matrix[r], ncols);
     }
 }
 
-//void printMatrix(int64_t* matrix, size_t nrows, size_t ncols){
-    //printf("[");
-    //for(size_t r = 0; r < nrows; ++r){
-        //printf("[");
-        //for(size_t c = 0; c < ncols; ++c){
-            //printf("%d", matrix[r][c]);
-            //if (c != ncols-1)
-                //printf(" ");
-        //}
-        //printf("]");
-    //}
-    //printf("]");
-//}
+void printMatrix(i64** matrix, size_t nrows, size_t ncols){
+    printf("[");
+    for(size_t r = 0; r < nrows; ++r){
+        printArray(matrix[r], ncols);
+        if (r != nrows-1) {printf("\n ");}
+    }
+    printf("]");
+}
+
+void deleteMatrix(i64** matrix, size_t nrows, size_t ncols){
+    for(size_t r = 0; r < nrows; ++r){
+        free(matrix[r]);
+    }
+}
