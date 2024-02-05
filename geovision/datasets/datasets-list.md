@@ -1,6 +1,7 @@
 Classification: 
     1. Imagenette 
     2. Imagewoof
+
     3. OxfordIIITPet (Classification)
 
     4. EuroSAT
@@ -9,6 +10,7 @@ Classification:
 
 Segmentation:
     1. OxfordIIITPet (Segmentation)
+
     2. Building Segmentation Dataset 
     3. BigEarthNet (Sen 1+2, Segmentation Version)
     4. PASTIS-R (Panoptic)

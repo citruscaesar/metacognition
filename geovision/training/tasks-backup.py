@@ -51,56 +51,67 @@ class ClassificationTask(LightningModule):
     def validation_step(self, batch, batch_idx):
         labels = batch[1]
         preds, loss = self.__forward(batch) 
-
         self.val_metrics.update(preds, labels)
-        self.val_cohen_kappa.update(preds, labels)
-        self.val_confusion_matrix.update(preds, labels)
 
-    def on_validation_epoch_end(self):
-        self.log_dict(self.val_metrics.compute());
-        self.log("val_cohen_kappa", self.val_cohen_kappa.compute());
-
-        fig, _ = self.val_confusion_matrix.plot();
-        fig.set_layout_engine("tight")
-        plt.show();
-
-        # Log to WandB
-        for logger in self.loggers:
-            if isinstance(logger, WandbLogger): #type : ignore
-                wandb.log({"val_confusion_matrix": fig})
-        fig.clear();
-
-        # Reset Metrics        
-        self.val_metrics.reset()
-        self.val_cohen_kappa.reset()
-        self.val_confusion_matrix.reset()
-
+        self.log("val_loss", loss, on_epoch=True)
+        self.log_dict(self.val_metrics, on_epoch=True)
+    
     def test_step(self, batch, batch_idx):
         labels = batch[1]
         preds, _ = self.__forward(batch)
-
         self.test_metrics.update(preds, labels)
-        self.test_cohen_kappa.update(preds, labels)
-        self.test_confusion_matrix.update(preds, labels)
+        self.classwise_metrics.update(preds, labels)
+        self.cohen_kappa.update(preds, labels)
+        self.confusion_matrix.update(preds, labels)
+
+        # Store Predicted Distribution
+        self.test_probs += [torch.softmax(x, -1).tolist() for x in preds]
+        # Store Predicted Labels (top-1) 
+        self.test_preds += [torch.argmax(x, -1).item() for x in preds]
+        # Store Actual Labels
+        self.test_labels += labels.tolist()
+
+        # TODO : Store model prediction as well as ground truth
+        # Store Top 5 Predicted Classes rather than the entire distribution
+        if len(batch) == 4:
+            paths = batch[3]
+            # Currently only stores top 1 predicted class
+            missclass_indices = torch.nonzero(preds.argmax(dim = -1) != labels).flatten().cpu().detach()
+            # Store Paths of Misclassified Images 
+            self.missclass_paths += [paths[i] for i in missclass_indices]
     
     def on_test_epoch_end(self):
-        self.log_dict(self.test_metrics.compute());
-        self.log("test_cohen_kappa", self.test_cohen_kappa.compute());
+        # TODO: Log Confusion Matrix, Classwise Metrics, Missclassified Samples to WandB
 
-        fig, _ = self.test_confusion_matrix.plot();
-        fig.set_layout_engine("tight")
+        # Log to CSV
+        self.log_dict(self.test_metrics.compute());
+        self.log("test_cohen_kappa", self.cohen_kappa.compute());
+        if self.missclass_paths:
+            pd.Series(self.missclass_paths).to_csv("misclassified-paths.csv", header=False, index=False)
+
+        # Log to STDOUT
+        __fig, _, = self.confusion_matrix.plot();
+        __fig.set_layout_engine("tight")
         plt.show();
+        print(classification_report(self.test_labels, self.test_preds)); 
 
         # Log to WandB
         for logger in self.loggers:
             if isinstance(logger, WandbLogger): #type : ignore
-                wandb.log({"test_confusion_matrix": fig})
-        fig.clear();
+                wandb.log({"test_confusion_matrix": __fig})
+        __fig.clear();
 
         # Reset Metrics        
         self.test_metrics.reset()
-        self.test_cohen_kappa.reset()
-        self.test_confusion_matrix.reset()
+        self.classwise_metrics.reset()
+        self.cohen_kappa.reset()
+        self.confusion_matrix.reset()
+
+        # Clear Lists
+        self.test_probs.clear()
+        self.test_preds.clear()
+        self.test_labels.clear()
+        self.missclass_paths.clear()
 
     def configure_optimizers(self):
         return self.optimizer(
@@ -117,38 +128,48 @@ class ClassificationTask(LightningModule):
         return preds, self.criterion(preds, labels)
 
     def __set_metrics(self):
+        self.test_probs = list()
+        self.test_preds = list()
+        self.test_labels = list()
+        self.missclass_paths = list()
+
         common_kwargs = {
             "task" : "multiclass",
             "num_classes": self.num_classes,
+            "compute_on_cpu": True
         }
+
+        self.confusion_matrix = torchmetrics.ConfusionMatrix(**common_kwargs)
+        self.cohen_kappa = torchmetrics.CohenKappa(**common_kwargs)
+
         macro_kwargs = common_kwargs.copy()
-        micro_kwargs = common_kwargs.copy()
         macro_kwargs["average"] = "macro"
-        micro_kwargs["average"] = "micro"
 
-        metrics = torchmetrics.MetricCollection({
-            "macro_accuracy" : torchmetrics.Accuracy(**macro_kwargs),
-            "macro_f1": torchmetrics.F1Score(**macro_kwargs),
-            "macro_precision": torchmetrics.Precision(**macro_kwargs),
-            "macro_recall": torchmetrics.Recall(**macro_kwargs),
-            "macro_auroc": torchmetrics.AUROC(**macro_kwargs),
+        #### Validation Metrics ####
 
-            "micro_accuracy" : torchmetrics.Accuracy(**micro_kwargs),
-            "micro_precision": torchmetrics.Precision(**micro_kwargs),
-            "micro_recall": torchmetrics.Recall(**micro_kwargs),
-        })
-        confusion_matrix = torchmetrics.ConfusionMatrix(**common_kwargs)
-        cohen_kappa = torchmetrics.CohenKappa(**common_kwargs)
+        self.val_metrics = torchmetrics.MetricCollection({
+            "accuracy" : torchmetrics.Accuracy(**macro_kwargs),
+            "f1": torchmetrics.F1Score(**macro_kwargs)
+        }, prefix="val_macro_")
 
-        self.val_loss = list()
-        self.val_metrics = metrics.clone(prefix = "val_")
-        self.val_cohen_kappa = cohen_kappa.clone()
-        self.val_confusion_matrix = confusion_matrix.clone()
+        ############################
 
-        self.test_metrics = metrics.clone(prefix = "test_")
-        self.test_cohen_kappa = cohen_kappa.clone()
-        self.test_confusion_matrix = confusion_matrix.clone()
+        self.test_metrics = torchmetrics.MetricCollection({
+            "accuracy": torchmetrics.Accuracy(**macro_kwargs),
+            "f1": torchmetrics.F1Score(**macro_kwargs),
+            "precision": torchmetrics.Precision(**macro_kwargs),
+            "recall": torchmetrics.Recall(**macro_kwargs),
+            "auroc": torchmetrics.AUROC(**macro_kwargs)
+        }, prefix="test_macro_")
 
+
+        classwise_kwargs = common_kwargs.copy()
+        classwise_kwargs["average"] = "none"
+        self.classwise_metrics = torchmetrics.MetricCollection({
+            "precision" : torchmetrics.Precision(**classwise_kwargs),
+            "recall" : torchmetrics.Recall(**classwise_kwargs),
+            "f1": torchmetrics.F1Score(**classwise_kwargs),
+        }, prefix="test_classwise_")
 
 class SegmentationTask(LightningModule):
     def __init__(self, model, **kwargs):
@@ -201,18 +222,20 @@ class SegmentationTask(LightningModule):
         self.test_confusion_matrix.update(preds, masks)
 
     def on_test_epoch_end(self):
+        # Log to CSV
         self.log_dict(self.test_metrics.compute());
         self.log("test_cohen_kappa", self.test_cohen_kappa.compute());
 
-        fig, _, = self.test_confusion_matrix.plot();
-        fig.set_layout_engine("tight")
+        # Log to STDOUT
+        __fig, _, = self.test_confusion_matrix.plot();
+        __fig.set_layout_engine("tight")
         plt.show();
 
         # Log to WandB
         for logger in self.loggers:
             if isinstance(logger, WandbLogger): #type : ignore
-                wandb.log({"test_confusion_matrix": fig})
-        fig.clear();
+                wandb.log({"test_confusion_matrix": __fig})
+        __fig.clear();
 
         # Reset Metrics        
         self.test_metrics.reset()
@@ -236,39 +259,43 @@ class SegmentationTask(LightningModule):
         return preds, self.criterion(preds, masks)
 
     def __set_metrics(self):
-        common_kwargs = {
+        _common_kwargs = {
             "task" : "multiclass",
             "num_classes": self.num_classes,
+            #"compute_on_cpu": True
         }
-        macro_kwargs = common_kwargs.copy()
-        micro_kwargs = common_kwargs.copy()
+        _confusion_matrix = torchmetrics.ConfusionMatrix(**_common_kwargs)
+        _cohen_kappa = torchmetrics.CohenKappa(**_common_kwargs)
 
-        macro_kwargs["average"] = "macro"
-        micro_kwargs["average"] = "micro"
+        _macro_kwargs = _common_kwargs.copy()
+        _micro_kwargs = _common_kwargs.copy()
 
-        metrics = torchmetrics.MetricCollection({
-            "macro_accuracy" : torchmetrics.Accuracy(**macro_kwargs),
-            "macro_f1": torchmetrics.F1Score(**macro_kwargs),
-            "macro_iou": torchmetrics.JaccardIndex(**macro_kwargs),
+        _macro_kwargs["average"] = "macro"
+        _micro_kwargs["average"] = "micro"
+
+        _metrics = torchmetrics.MetricCollection({
+            "macro_accuracy" : torchmetrics.Accuracy(**_macro_kwargs),
+            "macro_f1": torchmetrics.F1Score(**_macro_kwargs),
+            "macro_iou": torchmetrics.JaccardIndex(**_macro_kwargs),
             "macro_dice": torchmetrics.Dice(
                 num_classes=self.num_classes,
                 average = "macro",
                 mdmc_average = "global"),
-            "micro_accuracy" : torchmetrics.Accuracy(**micro_kwargs),
-            "micro_f1": torchmetrics.F1Score(**micro_kwargs),
-            "micro_iou": torchmetrics.JaccardIndex(**micro_kwargs),
+            "micro_accuracy" : torchmetrics.Accuracy(**_micro_kwargs),
+            "micro_f1": torchmetrics.F1Score(**_micro_kwargs),
+            "micro_iou": torchmetrics.JaccardIndex(**_micro_kwargs),
             "micro_dice": torchmetrics.Dice(
                 num_classes=self.num_classes,
                 average = "micro",
                 mdmc_average = "global"),
         })
-        confusion_matrix = torchmetrics.ConfusionMatrix(**common_kwargs)
-        cohen_kappa = torchmetrics.CohenKappa(**common_kwargs)
+        _confusion_matrix = torchmetrics.ConfusionMatrix(**_common_kwargs)
+        _cohen_kappa = torchmetrics.CohenKappa(**_common_kwargs)
 
-        self.val_metrics = metrics.clone(prefix = "val_")
-        self.val_cohen_kappa = cohen_kappa.clone()
-        self.val_confusion_matrix = confusion_matrix.clone()
+        self.val_metrics = _metrics.clone(prefix = "val_")
+        self.val_cohen_kappa = _cohen_kappa.clone()
+        self.val_confusion_matrix = _confusion_matrix.clone()
 
-        self.test_metrics = metrics.clone(prefix = "test_")
-        self.test_cohen_kappa = cohen_kappa.clone()
-        self.test_confusion_matrix = confusion_matrix.clone()
+        self.test_metrics = _metrics.clone(prefix = "test_")
+        self.test_cohen_kappa = _cohen_kappa.clone()
+        self.test_confusion_matrix = _confusion_matrix.clone()

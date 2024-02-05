@@ -4,9 +4,9 @@ import pandas as pd
 ### External Modules ###
 from pathlib import Path
 from lightning import LightningDataModule
+from torch.utils.data import DataLoader
 
 ### Custom Modules ###
-from data.dataloaders import DataLoaderFactory
 from etl.etl import (
     validate_dir,
     is_empty,
@@ -78,8 +78,6 @@ class ImageDatasetDataModule(LightningDataModule):
         self.image_transform = image_transform
         self.target_transform = target_transform
         self.common_transform = common_transform
-        self.data_loaders = DataLoaderFactory(self.batch_size, self.num_workers)
-
 
     def prepare_data(self):
         if not self.is_remote and not self.is_streaming:
@@ -118,23 +116,45 @@ class ImageDatasetDataModule(LightningDataModule):
 
     def train_dataloader(self) -> TRAIN_DATALOADERS:
         if self.is_remote or self.is_streaming:
-            return self.data_loaders.train_dataloader(self.train_dataset)
-        return self.data_loaders.streaming_train_dataloader(self.train_dataset)
+            return self.__streaming_train_dataloader(self.train_dataset)
+        return self.__local_train_dataloader(self.train_dataset)
     
     def val_dataloader(self) -> EVAL_DATALOADERS:
         if self.is_remote or self.is_streaming:
-            return self.data_loaders.eval_dataloader(self.val_dataset)
-        return self.data_loaders.streaming_eval_dataloader(self.val_dataset)
+            return self.__streaming_eval_dataloader(self.val_dataset)
+        return self.__local_eval_dataloader(self.val_dataset)
 
     def test_dataloader(self) -> EVAL_DATALOADERS:
-        if hasattr(self, "test_dataset"):
-            eval_dataset = self.test_dataset
-        else:
-            eval_dataset = self.val_dataset
-
         if self.is_remote or self.is_streaming:
-            return self.data_loaders.eval_dataloader(eval_dataset)
-        return self.data_loaders.streaming_eval_dataloader(eval_dataset)
+            return self.__streaming_eval_dataloader(self.test_dataset)
+        return self.__local_eval_dataloader(self.test_dataset)
+
+    def __local_train_dataloader(self, dataset) -> TRAIN_DATALOADERS:
+        return DataLoader(
+            dataset = dataset,  
+            batch_size = self.batch_size,
+            num_workers = self.num_workers,
+            persistent_workers = True,
+            pin_memory = True,
+            shuffle = True)
+
+    def __local_eval_dataloader(self, dataset) -> EVAL_DATALOADERS:
+        return DataLoader(
+            dataset = dataset,
+            batch_size = self.batch_size,
+            num_workers = 1,
+            shuffle = False)
+    
+    def __streaming_train_dataloader(self, dataset) -> TRAIN_DATALOADERS:
+        return DataLoader(
+            dataset = dataset,
+            batch_size = self.batch_size,
+            num_workers = self.num_workers)
+
+    def __streaming_eval_dataloader(self, dataset) -> EVAL_DATALOADERS:
+        return DataLoader(
+            dataset = dataset,
+            batch_size = self.batch_size)
 
     def __get_streaming_kwargs(self) -> dict[str, Any]:
         return {
