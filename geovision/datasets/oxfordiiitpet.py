@@ -45,7 +45,8 @@ class OxfordIIITPetBase:
             root: Path,
             dataframe: Optional[DataFrame],
             split: Literal["train", "val", "test"],
-            eval_split: float,
+            val_split: float,
+            test_split: float,
             random_seed: int,
             image_transform: Optional[Transform],
             target_transform: Optional[Transform],
@@ -53,6 +54,8 @@ class OxfordIIITPetBase:
             download = False,
         ):
         self.root = root
+
+        # TODO: Simplify this, define custom extract method 
         if download:
            self.__download_dataset_and_reset_root()
         assert self.root.is_dir(), "Root Does Not Exist"
@@ -62,7 +65,8 @@ class OxfordIIITPetBase:
         self.split = split 
 
         self.dataframe = dataframe
-        self.eval_split = eval_split
+        self.val_split = val_split
+        self.test_split = test_split
         self.random_seed = random_seed
 
         self.image_transform = image_transform or self.DEFAULT_IMAGE_TRANSFORM
@@ -77,7 +81,7 @@ class OxfordIIITPetBase:
         """
         for url, md5 in self.RESOURCES:
                 download_and_extract_archive(url, download_root = self.root.parent.as_posix(), md5=md5)
-        self.root =  self.root.parent / "oxford-iiit-pet"
+        self.root = self.root.parent / "oxford-iiit-pet"
     
     def _subset_dataframe(self, df: DataFrame) -> DataFrame:
         return (df.loc[df.split == self.split]
@@ -93,15 +97,16 @@ class OxfordIIITPetBase:
         return df[~df.image_path.apply(lambda x: x.stem in self.BAD_IMAGES)]
     
     def _assign_train_test_val_splits(self, df: DataFrame) -> DataFrame:
+        """Stratified random sampling based on self.val_split and self.test_split"""
+
         df = df.assign(name = lambda df: df.image_path.apply(
             lambda x: "_".join(x.stem.split("_")[:-1])))
 
-        NUM_SAMPLES_PER_CLASS = int(self.NUM_IMAGES_PER_CLASS * self.eval_split)
         test = (df
                 .groupby("name", group_keys=False)
                 .apply(
                     lambda x: x.sample(
-                    n = NUM_SAMPLES_PER_CLASS, 
+                    n = int(self.NUM_IMAGES_PER_CLASS * self.test_split), 
                     random_state = self.random_seed,
                     axis = 0)
                 .assign(split = "test")))
@@ -111,7 +116,7 @@ class OxfordIIITPetBase:
                 .groupby("name", group_keys=False)
                 .apply( 
                     lambda x: x.sample( 
-                    n = NUM_SAMPLES_PER_CLASS, 
+                    n = int(self.NUM_IMAGES_PER_CLASS * self.val_split), 
                     random_state = self.random_seed,
                     axis = 0)
                 .assign(split = "val")))
@@ -132,7 +137,8 @@ class OxfordIIITPetSegmentation(OxfordIIITPetBase):
             root: Path,
             dataframe: Optional[DataFrame] = None,
             split: Literal["train", "val", "test"] = "train",
-            eval_split: float = 0.2,
+            val_split: float = 0.2,
+            test_split: float = 0.2,
             random_seed: int = 42,
             image_transform: Optional[Transform] = None,
             target_transform: Optional[Transform] = None,
@@ -142,7 +148,7 @@ class OxfordIIITPetSegmentation(OxfordIIITPetBase):
         ) -> None:
 
         super().__init__(
-            root, dataframe, split, eval_split, random_seed, 
+            root, dataframe, split, val_split, test_split, random_seed, 
             image_transform, target_transform, common_transform, 
             download
         )
@@ -191,7 +197,8 @@ class OxfordIIITPetClassification(OxfordIIITPetBase):
             root: Path,
             dataframe: Optional[DataFrame] = None,
             split: Literal["train", "val", "test"] = "train",
-            eval_split: float = 0.2,
+            val_split: float = 0.2,
+            test_split: float = 0.2,
             random_seed: int = 42,
             image_transform: Optional[Transform] = None,
             download = False,
@@ -199,9 +206,9 @@ class OxfordIIITPetClassification(OxfordIIITPetBase):
     ) -> None:
 
         super().__init__(
-            root, dataframe, split, eval_split, random_seed, 
+            root, dataframe, split, val_split, test_split, random_seed, 
             image_transform, None, None, download)
-
+            
         if self.dataframe is None:
             self.dataframe = self.__classification_df()
             self.dataframe.to_csv("./oxfordiiitpet-classification-split.csv", index = False)

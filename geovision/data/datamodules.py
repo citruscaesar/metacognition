@@ -32,24 +32,44 @@ class ImageDatasetDataModule(LightningDataModule):
             is_remote: bool,  
             is_streaming: bool,
             dataframe: Optional[DataFrame | Path | str] = None,
-
             band_combination: Optional[tuple[int, ...]] = None,
             image_transform: Optional[Transform] = None,
             target_transform: Optional[Transform] = None,
             common_transform: Optional[Transform] = None,
+
+            dataset_name: str = "",
+            task: str = "",
+            random_seed: int = 42,
+            val_split: float = 0.2,
+            test_split: float = 0.2,
+            num_workers: int = 1,
+            batch_size: int = 1,
+            grad_accum: int = 1,
             **kwargs,
+
             ) -> None:
 
         super().__init__()
+        self.dataset_constructor = dataset_constructor
+        self.band_combination = band_combination
+        self.image_transform = image_transform
+        self.target_transform = target_transform
+        self.common_transform = common_transform
+
+        self.dataset_name = dataset_name 
+        self.task = task
+        self.random_seed = random_seed
+        self.val_split = val_split
+        self.test_split = test_split
+        self.num_workers = num_workers
+        self.batch_size = batch_size // grad_accum
+
         self.is_remote = is_remote
         self.is_streaming = is_streaming
-        self.dataset_constructor = dataset_constructor
-
         if self.is_remote:
             assert is_valid_remote(root), "Invalid URL" # type: ignore
             self.remote_url = root
             self.local_path = get_local_path_from_remote(root) # type: ignore
-
         else:
             # TODO : return validated path
             assert is_valid_path(root), "Path Does Not Exist"
@@ -62,22 +82,12 @@ class ImageDatasetDataModule(LightningDataModule):
                 self.dataframe = dataframe
             else:
                 self.dataframe = None
-
-        self.dataset_name = kwargs.get("dataset_name", "")
-        self.task = kwargs.get("task", "")
-        self.random_seed = kwargs.get("random_seed", 42)
-        self.eval_split = kwargs.get("eval_split", .25)
-        self.num_workers = kwargs.get("num_workers", 1)
-        self.batch_size = kwargs.get("batch_size", 32) // kwargs.get("grad_accum", 1)
         if is_streaming:
             self.predownload = kwargs.get("predownload")
             self.cache_limit = kwargs.get("cache_limit")
-        self.save_hyperparameters("dataset_name", "eval_split", "batch_size", "grad_accum")
 
-        self.band_combination = band_combination
-        self.image_transform = image_transform
-        self.target_transform = target_transform
-        self.common_transform = common_transform
+        self.save_hyperparameters("dataset_name", "task", "val_split", 
+                                  "test_split", "batch_size", "grad_accum")
 
     def prepare_data(self):
         if not self.is_remote and not self.is_streaming:
@@ -172,7 +182,8 @@ class ImageDatasetDataModule(LightningDataModule):
             "root": self.local_path,
             "dataframe": self.dataframe,
             "random_seed": self.random_seed,
-            "eval_split": self.eval_split,
+            "val_split": self.val_split,
+            "test_split": self.test_split,
             "image_transform": self.image_transform,
             "target_transform": self.target_transform,
             "common_transform": self.common_transform

@@ -45,7 +45,7 @@ class ImagenetteClassification:
             root: Path,
             dataframe: Optional[DataFrame] = None,
             split: Literal["train", "val", "test"] = "train",
-            eval_split: float = 0.2,
+            val_split: float = 0.2,
             random_seed: int = 42,
             image_transform: Optional[Transform] = None,
             download = False,
@@ -60,7 +60,7 @@ class ImagenetteClassification:
 
         assert split in ("train", "val", "test"), "Invalid Split"
         self.split = split 
-        self.eval_split = eval_split
+        self.val_split = val_split
         self.random_seed = random_seed
         self.image_transform = image_transform or self.DEFAULT_IMAGE_TRANSFORM
 
@@ -117,7 +117,7 @@ class ImagenetteClassification:
                 .groupby("label_str", group_keys=False)
                 .apply( 
                     lambda x: x.sample(
-                    frac = self.eval_split,
+                    frac = self.val_split,
                     random_state = self.random_seed, 
                     axis = 0)
                 .assign(split = "val")))

@@ -39,24 +39,6 @@ def transformation_strategy_cityosm(dataset_zip_path: Path, image_dir: Path, mas
             mask = np.where(mask==255, 0, 255).astype(np.uint8)
             iio.imwrite(mask_dst_path, mask, extension=".png")
 
-def transformation_strategy_inria(dataset_zip_path: Path, image_dir: Path, mask_dir: Path) -> None:
-    with zipfile.ZipFile(dataset_zip_path) as zf:
-        filenames = sorted([x.split('/')[-1] for x in zf.namelist() if "/train/images/" in x and not x.endswith("/")])
-        for filename in tqdm(filenames, desc = "Inria Progress"): 
-            image_src_path = f"AerialImageDataset/train/images/{filename}"
-            if "chicago" in filename:
-                image_dst_path = image_dir/f"{filename.replace('chicago', 'chicago_inria')}"
-            else:
-                image_dst_path = image_dir/filename
-            extract_image(image_src_path, image_dst_path, zf)
-
-            mask_src_path = f"AerialImageDataset/train/gt/{filename}"
-            if "chicago" in filename:
-                mask_dst_path = mask_dir/f"{filename.replace('chicago', 'chicago_inria')}"
-            else:
-                mask_dst_path = mask_dir/filename
-            extract_image(mask_src_path, mask_dst_path, zf)
-
 def transformation_strategy_vaihingen(dataset_zip_path: Path, image_dir: Path, mask_dir: Path) -> None:
     with zipfile.ZipFile(dataset_zip_path) as outer:
         
