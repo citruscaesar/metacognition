@@ -63,6 +63,9 @@ class ImageDatasetDataModule(LightningDataModule):
         self.num_workers = num_workers
         self.batch_size = batch_size // grad_accum
 
+        self.tile_size: Optional[tuple[int, int]] = kwargs.get("tile_size", None)
+        self.tile_stride: Optional[tuple[int, int]] = kwargs.get("tile_stride", None)
+
         self.is_remote = is_remote
         self.is_streaming = is_streaming
         if self.is_remote:
@@ -183,6 +186,8 @@ class ImageDatasetDataModule(LightningDataModule):
             "random_seed": self.random_seed,
             "val_split": self.val_split,
             "test_split": self.test_split,
+            "tile_size": self.tile_size,
+            "tile_stride": self.tile_stride,
             "image_transform": self.image_transform,
             "target_transform": self.target_transform,
             "common_transform": self.common_transform

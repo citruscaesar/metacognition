@@ -7,9 +7,11 @@ from imageio.v3 import imread, imwrite
 from torchvision.transforms.v2 import(
     Compose, ToImage, ToDtype, Identity)
 from torchvision.datasets.utils import download_url
-from streaming import MDSWriter, StreamingDataset, StreamingDataLoader
+from streaming import MDSWriter, StreamingDataset
 from streaming.base.util import clean_stale_shared_memory
 from tqdm import tqdm
+
+import h5py
 import zipfile
 
 from etl.extract import extract_multivolume_archive 
@@ -58,7 +60,7 @@ class InriaBase:
         for filename, split in zip(df.name, df.split):
             filename_stem = filename.split('.')[0]
             filename_suffix = filename.split('.')[-1]
-            table = {
+            table: dict[str, list] = {
                 "image_path": list(),
                 "mask_path": list(),
                 "height_begin": list(),
@@ -215,7 +217,7 @@ class InriaBase:
             (root / cls.DATASET_ARCHIVE_NAME).unlink(missing_ok=True)
 
     @classmethod
-    def write_to_hdf(cls, root: Path, hdf5_file_name_with_suffix: str, val_split: float, test_split: float, random_seed: int, **kwargs) -> None:
+    def write_to_hdf(cls, root: Path, val_split: float, test_split: float, random_seed: int, **kwargs) -> None:
         # bits * num_images * width * height * bands(RGB+Mask)
         # size_in_bits = 8 * 180 * 5000 * 5000 * (3+3+1) 
         # size_in_gigabytes = size_in_bits / (8 * 1024 * 1024 * 1024)
@@ -226,7 +228,7 @@ class InriaBase:
         sup_df = InriaBase.segmentation_supervised_df(val_split, test_split, random_seed) 
         unsup_df = InriaBase.segmentation_unsupervised_df()
         
-        HDF_DATASET = root / hdf5_file_name_with_suffix
+        HDF_DATASET = root / "inria.h5"
         with h5py.File(HDF_DATASET, 'w') as f:
             f.create_dataset("images", (180, 5000, 5000, 3), uint8)
             f.create_dataset("unsup", (180, 5000, 5000, 3), uint8)

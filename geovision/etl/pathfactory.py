@@ -9,6 +9,11 @@ class PathFactory:
 
         self.url = f"s3://{bucket}/datasets/{dataset_name}"
         self.shards_url = f"s3://{bucket}/shards/{dataset_name}"
-    
+
+        print(f"Local Dataset (.path): {self.path}")
+        print(f"Local Shards (.shards_path): {self.path}")
+        print(f"Remote Dataset (.url): {self.path}")
+        print(f"Local Shards (.shards_url): {self.path}")
+
     #TODO: add functions to verify, report and create local directories
     #TODO: add function to check the exisitence of bucket in s3
