@@ -46,7 +46,6 @@ class ImageDatasetDataModule(LightningDataModule):
             batch_size: int = 1,
             grad_accum: int = 1,
             **kwargs,
-
             ) -> None:
 
         super().__init__()

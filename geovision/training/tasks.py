@@ -167,7 +167,7 @@ class SegmentationTask(LightningModule):
         self.learning_rate = kwargs.get("learning_rate")
         self.momentum = kwargs.get("momentum")
         self.weight_decay = kwargs.get("weight_decay")
-        self.save_hyperparameters("task", "num_classes", "loss", "learning_rate", "momentum", "weight_decay") 
+        self.save_hyperparameters("task", "num_classes", "loss", "learning_rate") 
         self.__set_metrics()
 
     def forward(self, batch):
@@ -231,13 +231,13 @@ class SegmentationTask(LightningModule):
     def __forward(self, batch) -> tuple[torch.Tensor, torch.Tensor]:
         images = batch[0]
         masks = batch[1]
-        preds = self.model(images)["out"]
+        preds = self.model(images)
 
         return preds, self.criterion(preds, masks)
 
     def __set_metrics(self):
         common_kwargs = {
-            "task" : "multiclass",
+            "task" : "multiclass" if self.num_classes > 1 else "binary",
             "num_classes": self.num_classes,
         }
         macro_kwargs = common_kwargs.copy()
@@ -250,17 +250,21 @@ class SegmentationTask(LightningModule):
             "macro_accuracy" : torchmetrics.Accuracy(**macro_kwargs),
             "macro_f1": torchmetrics.F1Score(**macro_kwargs),
             "macro_iou": torchmetrics.JaccardIndex(**macro_kwargs),
-            "macro_dice": torchmetrics.Dice(
-                num_classes=self.num_classes,
-                average = "macro",
-                mdmc_average = "global"),
+            #"macro_dice": torchmetrics.Dice(
+                #num_classes=self.num_classes,
+                #average = "macro",
+                #mdmc_average = "global",
+                #multiclass = True if self.num_classes > 1 else False
+                #),
             "micro_accuracy" : torchmetrics.Accuracy(**micro_kwargs),
             "micro_f1": torchmetrics.F1Score(**micro_kwargs),
             "micro_iou": torchmetrics.JaccardIndex(**micro_kwargs),
-            "micro_dice": torchmetrics.Dice(
-                num_classes=self.num_classes,
-                average = "micro",
-                mdmc_average = "global"),
+            #"micro_dice": torchmetrics.Dice(
+                #num_classes=self.num_classes,
+                #average = "micro",
+                #mdmc_average = "global",
+                #multiclass = True if self.num_classes > 1 else False
+                #),
         })
         confusion_matrix = torchmetrics.ConfusionMatrix(**common_kwargs)
         cohen_kappa = torchmetrics.CohenKappa(**common_kwargs)
