@@ -1,6 +1,6 @@
 import shutil
 from pathlib import Path
-from numpy import newaxis, pad, uint8
+from numpy import newaxis, pad, uint8, where, eye
 from torch import float32, int64
 from pandas import DataFrame, concat
 from imageio.v3 import imread, imwrite
@@ -9,12 +9,13 @@ from torchvision.transforms.v2 import(
 from torchvision.datasets.utils import download_url
 from streaming import MDSWriter, StreamingDataset
 from streaming.base.util import clean_stale_shared_memory
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 
 import h5py
 import zipfile
 
 from etl.extract import extract_multivolume_archive 
+from .urban_footprint import ImageFolderSegmentation, StreamingSegmentation, HDF5Segmentation
 
 from typing import Optional, Literal
 from numpy.typing import NDArray
@@ -35,66 +36,58 @@ class InriaBase:
     IMAGE_SHAPE = (5000, 5000, 3)
 
     @classmethod
-    def segmentation_full_df(cls, val_split: float, test_split: float, random_seed: int, **kwargs) -> DataFrame:
-        return concat([
-            (cls.segmentation_supervised_df(val_split, test_split, random_seed) 
-                 .assign(image_path = lambda df: df.name.apply(
-                    lambda x: Path("scenes", "images", x)))
-                 .assign(mask_path = lambda df: df.name.apply(
-                    lambda x: Path("scenes", "masks", x)))
-                 ),
-
-            (cls.segmentation_unsupervised_df()
-                 .assign(image_path = lambda df: df.name.apply(
-                    lambda x: Path("scenes", "unsup", x)))
-                 .assign(mask_path = lambda df: df.image_path))])
-                    
+    def scene_df(cls, val_split: float, test_split: float, random_seed: int, **kwargs) -> DataFrame:
+        return concat([cls.supervised_df(val_split, test_split, random_seed),
+                       cls.unsupervised_df()])
+                                     
     @classmethod
-    def segmentation_tiled_df(cls, val_split: float, test_split: float, random_seed: int, tile_size: tuple[int, int], tile_stride: tuple[int, int], **kwargs) -> DataFrame:
+    def tiled_df(cls, val_split: float, test_split: float, random_seed: int, tile_size: tuple[int, int], tile_stride: tuple[int, int], **kwargs) -> DataFrame:
         assert isinstance(tile_size, tuple) and len(tile_size) == 2, "Invalid Tile Size"
         assert isinstance(tile_stride, tuple) and len(tile_stride) == 2, "Invalid Tile Stride"
-        TILED_DIR_NAME = f"tiled-{tile_size[0]}-{tile_size[1]}-{tile_stride[0]}-{tile_stride[1]}"
-        df = concat([cls.segmentation_supervised_df(val_split, test_split, random_seed), cls.segmentation_unsupervised_df()])
+
+        df = cls.scene_df(val_split, test_split, random_seed)
+        assert {"scene_idx", "name", "split"}.issubset(df.columns), f"scene_df missing columns"
 
         tile_dfs = list()
-        for filename, split in zip(df.name, df.split):
-            filename_stem = filename.split('.')[0]
-            filename_suffix = filename.split('.')[-1]
+        for _, row in df.iterrows():
             table: dict[str, list] = {
-                "image_path": list(),
-                "mask_path": list(),
+                "name": list(),
                 "height_begin": list(),
                 "height_end": list(),
                 "width_begin": list(),
                 "width_end": list()
             }
+
+            scene_name = Path(row["name"])
             for x in range(0, cls.__num_windows(cls.IMAGE_SHAPE[0], tile_size[0], tile_stride[0])):
                 for y in range(0, cls.__num_windows(cls.IMAGE_SHAPE[1], tile_size[1], tile_stride[1])):
+                    height_begin = x*tile_stride[0]
+                    height_end = x*tile_stride[0]+tile_size[0]
+                    width_begin = y*tile_stride[1]
+                    width_end = y*tile_stride[1]+tile_size[1]
+                    name = f"{scene_name.stem}-{height_begin}-{height_end}-{width_begin}-{width_end}{scene_name.suffix}"
 
-                    table["height_begin"].append(x*tile_stride[0])
-                    table["height_end"].append(x*tile_stride[0]+tile_size[0])
-                    table["width_begin"].append(y*tile_stride[1])
-                    table["width_end"].append(y*tile_stride[1]+tile_size[1])
+                    table["name"].append(name)
+                    table["height_begin"].append(height_begin)
+                    table["height_end"].append(height_end)
+                    table["width_begin"].append(width_begin)
+                    table["width_end"].append(width_end)
 
-                    _x, _y = f"{x}".zfill(2), f"{y}".zfill(2)
-                    tile_name = f"{filename_stem}-{_x}-{_y}.{filename_suffix}"
-                    if split == "unsup":
-                        table["image_path"].append(Path(TILED_DIR_NAME, "unsup", tile_name))
-                        table["mask_path"].append(Path(TILED_DIR_NAME, "unsup", tile_name))
-                    else:
-                        table["image_path"].append(Path(TILED_DIR_NAME, "images", tile_name))
-                        table["mask_path"].append(Path(TILED_DIR_NAME, "masks", tile_name))
-            tile_dfs.append(DataFrame(table).assign(scene_name = filename).assign(split = split))
+            tile_dfs.append(
+                DataFrame(table)
+                .assign(scene_idx = row["scene_idx"])
+                .assign(split = row["split"]))
+
         return (
             concat(tile_dfs)
-            .assign(name = lambda df: df.image_path.apply(lambda x: x.name))
-            [["scene_name", "name", "split", "image_path", "mask_path", "height_begin", "height_end", "width_begin", "width_end"]]
+            [["scene_idx", "name", "split", "height_begin", "height_end", "width_begin", "width_end"]]
         )
 
     @classmethod
-    def segmentation_supervised_df(cls, val_split: float, test_split: float, random_seed: int) -> DataFrame:
+    def supervised_df(cls, val_split: float, test_split: float, random_seed: int, **kwargs) -> DataFrame:
         sup_file_loc_pairs = [(f"{x}{num}.tif", x) for x in cls.SUPERVISED_LOCATIONS for num in range(1, 37)]
         return (DataFrame({"file": sup_file_loc_pairs})
+                .assign(scene_idx = lambda df: df.index)
                 .assign(name = lambda df: df.file.apply(
                     lambda x: x[0]))
                 .assign(loc = lambda df: df.file.apply(
@@ -103,9 +96,12 @@ class InriaBase:
                 .pipe(cls.__assign_train_test_val_splits, val_split, test_split, random_seed)) # type: ignore
 
     @classmethod
-    def segmentation_unsupervised_df(cls) -> DataFrame:
+    def unsupervised_df(cls) -> DataFrame:
         unsup_files = [f"{x}{num}.tif" for x in cls.UNSUPERVISED_LOCATIONS for num in range(1, 37)]
-        return DataFrame({"name": unsup_files}).assign(split = "unsup")
+        return (DataFrame({"name": unsup_files})
+                .assign(scene_idx = lambda df: df.index)
+                .assign(split = "unsup")
+                [["scene_idx", "name", "split"]])
 
     @classmethod
     def show_tiles_along_one_dim(cls, dim_len: int, kernel: int, stride: int, padding: Optional[int] = None) -> None:
@@ -171,10 +167,11 @@ class InriaBase:
             (dataset_archive).unlink()
 
     @classmethod
-    def tile(cls, root: Path, low_storage: bool, val_split: float, test_split: float, random_seed: int, tile_size: tuple[int, int], tile_stride: tuple[int, int]):
+    def tile(cls, root: Path, low_storage: bool, val_split: float, test_split: float, random_seed: int, tile_size: tuple[int, int], tile_stride: tuple[int, int], **kwargs):
         assert (root / cls.DATASET_ARCHIVE_NAME).is_file(), "Dataset Archive Missing"
+        DATASET_PATH = Path(root, cls.DATASET_ARCHIVE_NAME, "AerialImageDataset") 
 
-        tiled_dir_path = root / f"tiled-{tile_size[0]}-{tile_size[1]}-{tile_stride[0]}-{tile_stride[1]}"
+        tiled_dir_path = root / cls.get_tiled_dir(tile_size, tile_stride) 
         print(f"Tiling dataset into: {tiled_dir_path}")
 
         tiled_images_path = tiled_dir_path / "images"
@@ -184,37 +181,71 @@ class InriaBase:
         tiled_masks_path.mkdir(exist_ok=True, parents = True)
         tiled_unsup_path.mkdir(exist_ok=True, parents = True)
 
-        df = cls.segmentation_tiled_df(val_split, test_split, random_seed, tile_size, tile_stride)
+
+        df = cls.tiled_df(val_split, test_split, random_seed, tile_size, tile_stride)
+        df["scene_name"] = df["name"].apply(lambda x: "-".join(x.split('-')[:-4]) + ".tif")
+
         sup_df = df[df.split != "unsup"]
-        for scene_name in tqdm(sup_df.scene_name.unique(), desc = "Supervised Tiles"):
-            view = sup_df[sup_df.scene_name == scene_name].reset_index(drop = True)
-            scene_image_path = Path(root, cls.DATASET_ARCHIVE_NAME,"AerialImageDataset","train","images", scene_name)
-            scene_mask_path = Path(root, cls.DATASET_ARCHIVE_NAME,"AerialImageDataset","train","gt", scene_name)
-            image = imread(scene_image_path).squeeze()
-            mask = imread(scene_mask_path).squeeze()
-            image = cls.__pad_if_needed(image, view.height_end.max(), view.width_end.max())
-            mask = cls.__pad_if_needed(mask, view.height_end.max(), view.width_end.max())
-            for idx in range(0, len(view)):
-                tile = view.iloc[idx]
-                image_tile = image[tile.height_begin:tile.height_end, tile.width_begin:tile.width_end, :]
+        for scene_name in tqdm(sup_df["scene_name"].unique(), desc = "Supervised Tiles"):
+            scene = sup_df[sup_df["scene_name"] == scene_name]
+            image = imread(DATASET_PATH / "train"/ "images"/ scene_name)
+            mask = imread(DATASET_PATH / "train"/ "gt"/ scene_name)[:, :, newaxis]
+            if scene.height_end.max() >= 5000 or scene.width_end.max() > 5000:
+                image = cls.__get_padded_image(image, scene.height_end.max(), scene.width_end.max())
+                mask = cls.__get_padded_image(mask, scene.height_end.max(), scene.width_end.max())
+            
+            for _, tile in scene.iterrows() :
+                image_tile = image[tile.height_begin:tile.height_end, tile.width_begin:tile.width_end]
                 mask_tile = mask[tile.height_begin:tile.height_end, tile.width_begin:tile.width_end]
-                imwrite(root/tile.image_path, image_tile)
-                imwrite(root/tile.mask_path, mask_tile)
+                imwrite(tiled_images_path / tile["name"], image_tile)
+                imwrite(tiled_masks_path / tile["name"], mask_tile)
 
         unsup_df = df[df.split == "unsup"]
-        for scene_name in tqdm(unsup_df.scene_name.unique(), desc = "Unsupervised Tiles"):
-            view = unsup_df[unsup_df.scene_name == scene_name].reset_index(drop = True)
-            scene_image_path = Path(root,cls.DATASET_ARCHIVE_NAME,"AerialImageDataset","test","images", scene_name)
-            image = imread(scene_image_path).squeeze()
-            image = cls.__pad_if_needed(image, view.height_end.max(), view.width_end.max())
-            for idx in range(0, len(view)):
-                tile = view.iloc[idx]
+        for scene_name in tqdm(unsup_df["scene_name"].unique(), desc = "Unsupervised Tiles"):
+            scene = unsup_df[unsup_df["scene_name"] == scene_name]
+            image = imread(DATASET_PATH / "test"/ "images"/ scene_name)
+            if scene.height_end.max() >= 5000 or scene.width_end.max() > 5000:
+                image = cls.__get_padded_image(image, scene.height_end.max(), scene.width_end.max())
+
+            for _, tile in scene.iterrows():
                 image_tile = image[tile.height_begin:tile.height_end, tile.width_begin:tile.width_end, :]
-                imwrite(root/tile.image_path, image_tile)
+                imwrite(tiled_unsup_path / tile["name"], image_tile)
         
         if low_storage:
-            print(f"Deleting Dataset Archive: {cls.DATASET_ARCHIVE_NAME}")
-            (root / cls.DATASET_ARCHIVE_NAME).unlink(missing_ok=True)
+            print(f"Deleting Dataset Archive: {DATASET_PATH.parent}")
+            DATASET_PATH.parent.unlink(missing_ok=True)
+
+    @classmethod
+    def write_to_mds(cls, df: DataFrame, local_dir: Path, remote_url: Optional[str] = None) -> None:
+        required_cols = {"image_path", "mask_path", "name", "split"}
+        cols = set(df.columns)
+        assert required_cols.issubset(cols), f"Columns: {cols.difference(required_cols)} is/are missing"
+
+        for split in df["split"].unique():
+            view = df[df["split"] == split]
+
+            split_dir = local_dir / split 
+            shutil.rmtree(split_dir, ignore_errors=True)
+            split_dir.mkdir(parents = True)
+            split_dir = split_dir.as_posix()
+
+            if remote_url is None:
+                output = split_dir 
+                print(f"Writing To Local Only: {split_dir}")
+            else:
+                split_url = f"{remote_url}/{split}"
+                output = (split_dir, split_url)
+                print(f"Writing To Local: {split_dir}")
+                print(f"Writing To Remote: {split_url}")
+            
+            with MDSWriter(out = output, columns={"image": "bytes","mask": "bytes","name": "str"},
+                           progress_bar = True, max_workers = 4, size_limit = "128mb") as mds:
+                for idx in range(len(view)):
+                    mds.write({
+                        "image": imwrite("<bytes>", imread(view.iloc[idx]["image_path"]), extension=".tif"),
+                        "mask": imwrite("<bytes>", imread(view.iloc[idx]["mask_path"]), extension=".tif"),
+                        "name": str(view.iloc[idx]["name"])
+                    })
 
     @classmethod
     def write_to_hdf(cls, root: Path, val_split: float, test_split: float, random_seed: int, **kwargs) -> None:
@@ -222,22 +253,28 @@ class InriaBase:
         # size_in_bits = 8 * 180 * 5000 * 5000 * (3+3+1) 
         # size_in_gigabytes = size_in_bits / (8 * 1024 * 1024 * 1024)
         # ~29.34GB
-        DATASET = root / InriaBase.DATASET_ARCHIVE_NAME
-        assert DATASET.is_file(), "Dataset Archive Missing"
+        DATASET = root / InriaBase.DATASET_ARCHIVE_NAME / "AerialImageDataset"
+        assert DATASET.parent.is_file(), "Dataset Archive Missing"
 
-        sup_df = InriaBase.segmentation_supervised_df(val_split, test_split, random_seed) 
-        unsup_df = InriaBase.segmentation_unsupervised_df()
-        
-        HDF_DATASET = root / "inria.h5"
+        sup_df = InriaBase.supervised_df(val_split, test_split, random_seed) 
+        unsup_df = InriaBase.unsupervised_df()
+        HDF_DATASET = root / "inria2.h5"
         with h5py.File(HDF_DATASET, 'w') as f:
             f.create_dataset("images", (180, 5000, 5000, 3), uint8)
             f.create_dataset("unsup", (180, 5000, 5000, 3), uint8)
-            f.create_dataset("masks", (180, 5000, 5000, 1), uint8)
-            with zipfile.ZipFile(DATASET, 'r') as zf:
+            f.create_dataset("masks", (180, 5000, 5000, 2), uint8)
+            with zipfile.ZipFile(DATASET.parent, 'r') as zf:
                 for idx in tqdm(range(180), desc = "Progress"):
-                    f["images"][idx] = imread(DATASET/"AerialImageDataset"/"train"/"images"/sup_df.iloc[idx]["name"])
-                    f["masks"][idx] = imread(DATASET/"AerialImageDataset"/"train"/"gt"/sup_df.iloc[idx]["name"])[:, :, newaxis] 
-                    f["unsup"][idx] = imread(DATASET/"AerialImageDataset"/"test"/"images"/unsup_df.iloc[idx]["name"])
+                    f["images"][idx] = imread(DATASET/"train"/"images"/sup_df.iloc[idx]["name"]) # type: ignore
+                    f["masks"][idx] = (
+                        eye(2, dtype = uint8)
+                        [where(imread(DATASET/"train"/"gt"/sup_df.iloc[idx]["name"]).squeeze() == 255, 1, 0)]
+                    )
+                    f["unsup"][idx] = imread(DATASET/"test"/"images"/unsup_df.iloc[idx]["name"]) # type: ignore
+
+    @staticmethod
+    def get_tiled_dir(tile_size: tuple[int, int], tile_stride: tuple[int, int]):
+        return f"tiled-{tile_size[0]}-{tile_size[1]}-{tile_stride[0]}-{tile_stride[1]}"
 
     @staticmethod
     def __assign_train_test_val_splits(df: DataFrame, val_split: float, test_split: float, random_seed: int) -> DataFrame:
@@ -277,283 +314,20 @@ class InriaBase:
         return (num_windows - 1) * stride + kernel - length 
 
     @staticmethod
-    def __pad_if_needed(image: NDArray, max_height: int, max_width: int) -> NDArray:
-        height_pad = max_height - image.shape[0] 
-        width_pad = max_width - image.shape[1] 
-        if height_pad or width_pad:
-            if image.ndim == 3:
-                image = pad(image, ((0, height_pad), (0, width_pad), (0, 0)), "constant", constant_values=0)
-            elif image.ndim == 2:
-                image = pad(image, ((0, height_pad), (0, width_pad)), "constant", constant_values=0)
-        return image.squeeze()
+    def __get_padded_image(image, max_scene_height: int, max_scene_width: int) -> NDArray:
+        return pad(
+            image, 
+            ((0, max(0, max_scene_height - 5000)), (0, max(0, max_scene_width - 5000)), (0, 0)),
+            "constant",
+            constant_values = 0
+        )
 
     @staticmethod
     def __extract_image_to_dst(src_path: str, dst_path: Path, zip_file_obj: zipfile.ZipFile):
         with open(dst_path, "wb") as dst_file_obj:
             with zip_file_obj.open(src_path, "r") as src_file_obj:
                 shutil.copyfileobj(src_file_obj, dst_file_obj)
-   
-class ImageFolderSegmentation:
-    DEFAULT_IMAGE_TRANSFORM = Compose([
-                ToImage(),
-                ToDtype(float32, scale=True),
-            ])
-        
-    DEFAULT_TARGET_TRANSFORM = Compose([
-        ToImage(),
-        ToDtype(int64, scale=False),
-    ])
-
-    DEFAULT_COMMON_TRANSFORM = Identity()
-
-    def __init__(
-            self,
-            root: Path,
-            df: Optional[DataFrame] = None,
-            split: str = "train",
-            test_split: float = 0.2,
-            val_split: float = 0.2,
-            random_seed: int = 42,
-            image_transform: Optional[Transform] = None,
-            target_transform: Optional[Transform] = None,
-            common_transform: Optional[Transform] = None,
-            **kwargs
-        ) -> None:
-
-        self.root = root
-        self.split = split 
-        self.val_split = val_split
-        self.test_split = test_split
-        self.random_seed = random_seed
-        self.image_transform = image_transform or self.DEFAULT_IMAGE_TRANSFORM
-        self.target_transform = target_transform or self.DEFAULT_TARGET_TRANSFORM 
-        self.common_transform = common_transform or self.DEFAULT_COMMON_TRANSFORM 
-
-        if isinstance(df, DataFrame):
-            self.df = df
-        else:
-            self.df = self.__segmentation_df()
-        self.df = (
-            self.df
-            .pipe(self.__subset_df)
-            .pipe(self.__prefix_root_to_df)
-        )
-        
-    def __len__(self):
-        return len(self.df)
-
-    def __getitem__(self, idx) -> tuple[Tensor, Tensor, str]:
-        datapoint = self.df.iloc[idx]
-        image = imread(datapoint["image_path"]).squeeze() # type: ignore
-        image = self.image_transform(image)
-        mask = (imread(datapoint["mask_path"])
-                .squeeze()
-                [:, :, newaxis])
-        mask = self.target_transform(mask)
-        image, mask = self.common_transform([image, mask]) 
-        return image, mask, str(datapoint["image_path"])
     
-    def __segmentation_df(self) -> DataFrame:
-        """Implements the Random Split Strategy """
-        return (DataFrame({"image_path": (self.root/"images").iterdir()})
-                .assign(image_path = lambda df: df.image_path.apply(
-                    lambda x: Path(x.parent.stem, x.name)))
-                .assign(mask_path = lambda df: df.image_path.apply(
-                    lambda x: Path("masks", x.name)))
-                .assign(location = lambda df: df.image_path.apply(
-                    lambda x: self.__get_location(x.stem)))
-                .pipe(self.__assign_train_test_val_splits))
-    
-    def __assign_train_test_val_splits(self, df: DataFrame) -> DataFrame:
-        test = (df
-                .groupby("location", group_keys=False)
-                .apply(
-                    lambda x: x.sample(
-                    frac = self.test_split,
-                    random_state = self.random_seed,
-                    axis = 0)
-                .assign(split = "test")))
-        val = (df
-                .drop(test.index, axis = 0)
-                .groupby("location", group_keys=False)
-                .apply( 
-                    lambda x: x.sample( 
-                    frac = self.val_split / (1-self.test_split),
-                    random_state = self.random_seed,
-                    axis = 0)
-                .assign(split = "val")))
-        train = (df
-                  .drop(test.index, axis = 0)
-                  .drop(val.index, axis = 0)
-                  .assign(split = "train"))
-
-        return (concat([train, val, test])
-                    .sort_index()
-                    #.sort_values("image_path")
-                    #.reset_index(drop = True)
-                    .drop("location", axis = 1))
-    
-    def __subset_df(self, df: DataFrame) -> DataFrame:
-        if self.split == "trainval":
-            return (df.loc[(df.split == "train") | (df.split == "val")].reset_index(drop=True)) # type: ignore
-        return (df.loc[df.split == self.split].reset_index(drop=True))
-
-    def __prefix_root_to_df(self, df: DataFrame) -> DataFrame:
-        df["image_path"] = df["image_path"].apply(lambda x: self.root / x)
-        df["mask_path"] = df["mask_path"].apply(lambda x: self.root / x)
-        return df
-
-    def __get_location(self, filename: str) -> str:
-        return (''.join([i for i in filename if not i.isdigit()])
-                  .removesuffix("_"))
-
-class StreamingSegmentation(StreamingDataset):
-    DEFAULT_IMAGE_TRANSFORM = Compose([
-                ToImage(),
-                ToDtype(float32, scale=True),
-            ])
-        
-    DEFAULT_TARGET_TRANSFORM = Compose([
-        ToImage(),
-        ToDtype(int64, scale=False),
-    ])
-
-    DEFAULT_COMMON_TRANSFORM = Identity()
-
-    DTYPES = {
-        "image": "bytes",
-        "mask": "bytes",
-        "name": "str"
-    }
-
-    def __init__(
-            self,
-            local: Path,
-            remote: Optional[Path] = None,
-            split: Literal["train", "val", "test"] = "train",
-            image_transform: Optional[Transform] = None,
-            target_transform: Optional[Transform] = None,
-            common_transform: Optional[Transform] = None,
-            shuffle: bool = False,
-            batch_size: int = 1,
-            predownload: int = 1,
-            cache_limit: int | str = "1gb",
-            **kwargs,
-    ) -> None:
-
-        self.image_transform = image_transform or self.DEFAULT_IMAGE_TRANSFORM
-        self.target_transform = target_transform or self.DEFAULT_TARGET_TRANSFORM 
-        self.common_transform = common_transform or self.DEFAULT_COMMON_TRANSFORM
-
-        clean_stale_shared_memory()
-        super().__init__(
-            remote = remote, # type: ignore
-            local = local, # type: ignore
-            split = split, 
-            shuffle = shuffle,
-            batch_size = batch_size,
-            cache_limit = cache_limit,
-            predownload = predownload
-        )
-
-    def __getitem__(self, idx):
-        datapoint = super().__getitem__(idx)
-        image = self.image_transform(imread(datapoint["image"]))
-        mask = self.target_transform(imread(datapoint["mask"])[:, :, newaxis])
-        image, mask = self.common_transform([image, mask])
-        return image, mask, datapoint["name"]
-    
-    @classmethod
-    def write(cls, df: DataFrame, local_dir: Path, remote_url: Optional[str] = None) -> None:
-        for split in df.split.unique():
-            view = df[df.split == split]
-
-            split_dir = local_dir / split 
-            shutil.rmtree(split_dir, ignore_errors=True)
-            split_dir.mkdir(parents = True)
-            split_dir = split_dir.as_posix()
-
-            if remote_url is not None:
-                split_url = f"{remote_url}/{split}"
-                output = (split_dir, split_url)
-                print(f"Writing To Local: {split_dir}")
-                print(f"Writing To Remote: {split_url}")
-            else:
-                output = split_dir 
-                print(f"Writing To Local: {split_dir}")
-            
-            with MDSWriter(out = output, columns=cls.DTYPES, # type: ignore
-                        progress_bar = True, max_workers = 4, size_limit = "128mb") as mds:
-                for idx in range(len(view)):
-                    mds.write({
-                        "image": imwrite("<bytes>", imread(view.iloc[idx]["image_path"]), extension=".tif"),
-                        "mask": imwrite("<bytes>", imread(view.iloc[idx]["mask_path"]), extension=".tif"),
-                        "name": str(view.iloc[idx]["name"])
-                    })
-
-class HDF5Segmentation:
-    DEFAULT_IMAGE_TRANSFORM = Compose([
-                ToImage(),
-                ToDtype(float32, scale=True),
-            ])
-        
-    DEFAULT_TARGET_TRANSFORM = Compose([
-        ToImage(),
-        ToDtype(int64, scale=False),
-    ])
-
-    DEFAULT_COMMON_TRANSFORM = Identity()
-
-    def __init__(
-            self,
-            hdf5_path: Path,
-            df: DataFrame,
-            tiled: bool,
-            split: Literal["train", "val", "test", "unsup"] = "train",
-            image_transform: Optional[Transform] = None,
-            target_transform: Optional[Transform] = None,
-            common_transform: Optional[Transform] = None,
-            **kwargs
-        ) -> None:
-
-        assert hdf5_path.is_file(), "provide .hdf5 dataset path"
-        assert isinstance(df, DataFrame), "not a dataframe"
-        assert split in ("train", "val", "trainval", "test", "unsup"), "invalid split"
-
-        self.hdf5_path = hdf5_path
-        self.image_transform = image_transform or self.DEFAULT_IMAGE_TRANSFORM
-        self.target_transform = target_transform or self.DEFAULT_TARGET_TRANSFORM 
-        self.common_transform = common_transform or self.DEFAULT_COMMON_TRANSFORM
-
-        self.df = (
-            df
-            .pipe(self.__split_view, split)
-        ) 
-
-        if tiled:
-            self.__getitem__ = self.__get_tile
-        else:
-            self.__getitem__ = self.__get_scene
-
-        # TODO: Figure out general .hdf structure and usage in conjunction with df
-        # TODO: Figure out how to load tiles which exceed scene limitations (pad during runtime) 
-
-    def __len__(self):
-        return len(self.df)
-
-    def __get_scene(self, idx):
-        pass
-
-    def __get_tile(self, idx):
-        pass
-
-    def __split_view(self, df: DataFrame, split: str) -> DataFrame:
-        if split == "trainval":
-            return df[(df.split == "train") | (df.split == "val")]
-        else:
-            assert split in df.split.unique(), "split not found in dataframe"
-            return df[df.split == split]
-
 class InriaImageFolder(ImageFolderSegmentation):
     def __init__(
             self,
@@ -593,9 +367,12 @@ class InriaImageFolder(ImageFolderSegmentation):
         if isinstance(df, DataFrame):
             self.df = df
         elif tile_size is not None and tile_stride is not None:
-            self.df = InriaBase.segmentation_tiled_df(**_kwargs)
+            print("Tiled Dataset")
+            self.df = InriaBase.tiled_df(**_kwargs).pipe(self.__add_tile_paths, tile_size, tile_stride)
         else:
-            self.df = InriaBase.segmentation_full_df(**_kwargs)
+            print("Scene Dataset")
+            self.df = InriaBase.scene_df(**_kwargs).pipe(self.__add_scene_paths)
+        assert {"name", "image_path", "mask_path"}.issubset(self.df.columns), "Missing Columns"
 
         super().__init__(
             root = root, 
@@ -604,9 +381,72 @@ class InriaImageFolder(ImageFolderSegmentation):
             image_transform = image_transform,
             target_transform = target_transform,
             common_transform = common_transform)
+        
+    def __add_tile_paths(self, df: DataFrame, tile_size, tile_stride):
+        tiled_dir = InriaBase.get_tiled_dir(tile_size, tile_stride) 
+        return (
+            df 
+            .assign(image_path = lambda df: df["name"].apply(
+                lambda x: Path(tiled_dir, "images", x)))
+            .assign(mask_path = lambda df: df["name"].apply(
+                lambda x: Path(tiled_dir, "masks", x))))
+
+    def __add_scene_paths(self, df: DataFrame):
+        return (
+            df
+            .assign(image_path = lambda df: df.apply(
+                lambda x: Path("scenes", "images", x["name"]) if x["split"] != "unsup"
+                else Path("scenes", "unsup", x["name"]), axis = 1))
+            .assign(mask_path = lambda df: df["image_path"].apply(
+                lambda x: Path(str(x).replace("image", "mask"))))
+            )
 
 class InriaStreaming(StreamingSegmentation):
-    pass
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
 class InriaHDF5(HDF5Segmentation):
-    pass
+    def __init__(
+            self,
+            root: Path,
+            df: Optional[DataFrame] = None,
+            split: Literal["train", "val", "trainval", "test", "unsup"] = "train",
+            test_split: float = 0.2,
+            val_split: float = 0.2,
+            random_seed: int = 42,
+            tile_size: Optional[tuple[int, int]] = None,
+            tile_stride: Optional[tuple[int, int]] = None,
+            image_transform: Optional[Transform] = None,
+            target_transform: Optional[Transform] = None,
+            common_transform: Optional[Transform] = None,
+            download: bool = False,
+        ):
+
+        _kwargs = {
+            "val_split": val_split,
+            "test_split": test_split,
+            "random_seed": random_seed,
+            "tile_size": tile_size,
+            "tile_stride": tile_stride,
+        }
+
+        #if download:
+        #   etl.s3_interface.download_from_s3("s3://segmentation/datasets/urban-footprint/inria.h5", root)
+
+        if isinstance(df, DataFrame):
+            self.df = df
+        elif tile_size is not None and tile_stride is not None:
+            self.df = InriaBase.tiled_df(**_kwargs)
+        else:
+            self.df = InriaBase.scene_df(**_kwargs) 
+
+        super().__init__(
+            hdf5_path = root / "inria.h5",
+            image_dataset_name = "images",
+            mask_dataset_name = "masks",
+            df = self.df,
+            split = split,
+            image_transform = image_transform,
+            target_transform = target_transform,
+            common_transform = common_transform,
+        )

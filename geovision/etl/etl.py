@@ -31,7 +31,7 @@ def is_valid_path(local_path: str | Path) -> bool:
 
 def get_local_path_from_remote(remote_url: str) -> Path:
     assert isinstance(remote_url, str), "URL must be of string type"
-    return Path.home() / ('/'.join(Path(remote_url.split("//")[-1]).parts[1:]))
+    return Path(Path.home(), *remote_url.split('//')[-1].split('/'))
 
 def is_empty(local_path: str|Path) -> bool:
     local_path = Path(local_path)

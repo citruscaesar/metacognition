@@ -1,4 +1,5 @@
 from torch.nn import (
+    BCEWithLogitsLoss,
     CrossEntropyLoss,
     MSELoss
 )
@@ -11,6 +12,7 @@ out_type = Union[CrossEntropyLoss, MSELoss]
 
 class LossFactory:
     losses = {
+        "binary_cross_entropy": BCEWithLogitsLoss(),
         "cross_entropy": CrossEntropyLoss(),
         "mean_squared_error": MSELoss(),
     }
@@ -18,4 +20,4 @@ class LossFactory:
     @classmethod
     def get(cls, loss_string: str) -> Module:
         assert loss_string in cls.losses, "invalid string"
-        return cls.losses.get(loss_string) # type : ignore
+        return cls.losses.get(loss_string) # type: ignore

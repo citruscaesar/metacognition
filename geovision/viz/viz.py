@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import LabelEncoder
 from tqdm import tqdm
 
-
 def calculate_statistics(self, df: pd.DataFrame):
     #Archaic Way
     sums = np.array([0, 0, 0], dtype = np.float64)

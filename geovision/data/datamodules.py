@@ -37,26 +37,29 @@ class ImageDatasetDataModule(LightningDataModule):
             target_transform: Optional[Transform] = None,
             common_transform: Optional[Transform] = None,
 
+            #HParams
             dataset_name: str = "",
             task: str = "",
+            num_classes: int = 0,
             random_seed: int = 42,
-            val_split: float = 0.2,
-            test_split: float = 0.2,
-            num_workers: int = 1,
-            batch_size: int = 1,
+            val_split: float = 0.0,
+            test_split: float = 0.0,
+            num_workers: int = 0,
+            batch_size: int = 0,
             grad_accum: int = 1,
             **kwargs,
             ) -> None:
 
         super().__init__()
+        self.dataset_name = dataset_name
+        self.task = task
+        self.num_classes = num_classes
         self.dataset_constructor = dataset_constructor
         self.band_combination = band_combination
         self.image_transform = image_transform
         self.target_transform = target_transform
         self.common_transform = common_transform
 
-        self.dataset_name = dataset_name 
-        self.task = task
         self.random_seed = random_seed
         self.val_split = val_split
         self.test_split = test_split
@@ -68,10 +71,13 @@ class ImageDatasetDataModule(LightningDataModule):
 
         self.is_remote = is_remote
         self.is_streaming = is_streaming
+
         if self.is_remote:
+            assert self.is_streaming, "remote non-streaming datasets are not supported"
             assert is_valid_remote(root), "Invalid URL" # type: ignore
             self.remote_url = root
             self.local_path = get_local_path_from_remote(root) # type: ignore
+
         else:
             # TODO : return validated path
             assert is_valid_path(root), "Path Does Not Exist"
@@ -84,12 +90,47 @@ class ImageDatasetDataModule(LightningDataModule):
                 self.dataframe = dataframe
             else:
                 self.dataframe = None
-        if is_streaming:
+
+        if self.is_streaming:
             self.predownload = kwargs.get("predownload")
             self.cache_limit = kwargs.get("cache_limit")
 
-        self.save_hyperparameters("dataset_name", "task", "val_split", 
-                                  "test_split", "batch_size", "grad_accum")
+        self.save_hyperparameters(
+            "dataset_name", "task", "num_classes", "random_seed", "val_split", "test_split", "batch_size"
+        )
+    
+    def __repr__(self):
+        if self.is_streaming and self.is_remote:
+            mode = f"Remote Streaming Dataset: {self.dataset_name.capitalize()}  @ [{self.remote_url}]\nCached Locally @ [{self.local_path}]"
+        elif self.is_streaming and not self.is_remote:
+            mode = f"Local Streaming Dataset: {self.dataset_name.capitalize()} Dataset @ [{self.local_path}]"
+        else:
+            mode = f"Local Dataset: {self.dataset_name.capitalize()} @ [{self.local_path}]"
+
+        if self.dataframe is not None: 
+            split = f"Train Val Test: Using Provided DataFrame"
+        else:
+            train_split = (1-(self.test_split+self.val_split)) * 100
+            split = f"Train: {train_split}%\nVal: {self.val_split*100}%\nTest: {self.test_split*100}%"
+        
+        if self.band_combination is not None:
+            band_combination = f"\nBand Combination: {self.band_combination}"
+        else:
+            band_combination = ""
+        
+        if self.tile_size is not None and self.tile_stride is not None:
+            tiled = f"\nTile Kernel: {self.tile_size}, Stride: {self.tile_stride}"
+        else:
+            tiled = "" 
+
+
+        return f"""
+        \n{mode}\nConfigured For: {self.task.capitalize()}
+        \nRandom Seed: {self.random_seed}\n{split}\nBatch Size: {self.batch_size}{band_combination}{tiled}
+        \nImage Transform: \n{self.image_transform or "Not Configured"}
+        \nTarget Transform: \n{self.target_transform or "Not Configured"}
+        \nCommon Transform: \n{self.common_transform or "Not Configured"}
+        """ 
 
     def prepare_data(self):
         if not self.is_remote and not self.is_streaming:
@@ -170,22 +211,23 @@ class ImageDatasetDataModule(LightningDataModule):
 
     def __get_streaming_kwargs(self) -> dict[str, Any]:
         return {
+            # TODO: Add all streaming kwargs
             "batch_size": self.batch_size,
             "band_combination": self.band_combination,
             "predownload": self.predownload,
             "cache_limit": self.cache_limit,
             "image_transform": self.image_transform,
             "target_transform": self.target_transform,
-            "common_transform": self.common_transform
+            "common_transform": self.common_transform,
         }
 
     def __get_local_kwargs(self) -> dict[str, Any]:
         return {
             "root": self.local_path,
-            "dataframe": self.dataframe,
-            "random_seed": self.random_seed,
+            "df": self.dataframe,
             "val_split": self.val_split,
             "test_split": self.test_split,
+            "random_seed": self.random_seed,
             "tile_size": self.tile_size,
             "tile_stride": self.tile_stride,
             "image_transform": self.image_transform,
