@@ -99,39 +99,6 @@ class ImageDatasetDataModule(LightningDataModule):
             "dataset_name", "task", "num_classes", "random_seed", "val_split", "test_split", "batch_size"
         )
     
-    def __repr__(self):
-        if self.is_streaming and self.is_remote:
-            mode = f"Remote Streaming Dataset: {self.dataset_name.capitalize()}  @ [{self.remote_url}]\nCached Locally @ [{self.local_path}]"
-        elif self.is_streaming and not self.is_remote:
-            mode = f"Local Streaming Dataset: {self.dataset_name.capitalize()} Dataset @ [{self.local_path}]"
-        else:
-            mode = f"Local Dataset: {self.dataset_name.capitalize()} @ [{self.local_path}]"
-
-        if self.dataframe is not None: 
-            split = f"Train Val Test: Using Provided DataFrame"
-        else:
-            train_split = (1-(self.test_split+self.val_split)) * 100
-            split = f"Train: {train_split}%\nVal: {self.val_split*100}%\nTest: {self.test_split*100}%"
-        
-        if self.band_combination is not None:
-            band_combination = f"\nBand Combination: {self.band_combination}"
-        else:
-            band_combination = ""
-        
-        if self.tile_size is not None and self.tile_stride is not None:
-            tiled = f"\nTile Kernel: {self.tile_size}, Stride: {self.tile_stride}"
-        else:
-            tiled = "" 
-
-
-        return f"""
-        \n{mode}\nConfigured For: {self.task.capitalize()}
-        \nRandom Seed: {self.random_seed}\n{split}\nBatch Size: {self.batch_size}{band_combination}{tiled}
-        \nImage Transform: \n{self.image_transform or "Not Configured"}
-        \nTarget Transform: \n{self.target_transform or "Not Configured"}
-        \nCommon Transform: \n{self.common_transform or "Not Configured"}
-        """ 
-
     def prepare_data(self):
         if not self.is_remote and not self.is_streaming:
             if is_empty(self.local_path):
@@ -303,3 +270,33 @@ class ImageDatasetDataModule(LightningDataModule):
             split = "test",
             **self.__get_local_kwargs(),
         )
+
+    def __repr__(self):
+        if self.is_streaming and self.is_remote:
+            mode = f"Remote Streaming Dataset: {self.dataset_name}  @ [{self.remote_url}]\nCached Locally @ [{self.local_path}]"
+        elif self.is_streaming and not self.is_remote:
+            mode = f"Local Streaming Dataset: {self.dataset_name} Dataset @ [{self.local_path}]"
+        else:
+            mode = f"Local Dataset: {self.dataset_name} @ [{self.local_path}]"
+
+        if self.dataframe is not None: 
+            split = f"Train Val Test: Using Provided DataFrame"
+        else:
+            train_split = (1-(self.test_split+self.val_split)) * 100
+            split = f"Train: {train_split}%\nVal: {self.val_split*100}%\nTest: {self.test_split*100}%"
+        
+        if self.band_combination is not None:
+            band_combination = f"\nBand Combination: {self.band_combination}"
+        else:
+            band_combination = ""
+        
+        if self.tile_size is not None and self.tile_stride is not None:
+            tiled = f"\nTile Kernel: {self.tile_size}, Stride: {self.tile_stride}"
+        else:
+            tiled = "" 
+
+
+        return f"""
+        \n{mode}\nConfigured For: {self.task}
+        \nRandom Seed: {self.random_seed}\n{split}\nBatch Size: {self.batch_size}{band_combination}{tiled}
+        """ 

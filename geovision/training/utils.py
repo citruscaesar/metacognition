@@ -4,8 +4,10 @@ from typing import Any, Optional
 
 METRICS = {
     "accuracy": torchmetrics.Accuracy,
+    "f1": torchmetrics.F1Score,
+    "jaccard": torchmetrics.JaccardIndex,
     "confusion_matrix": torchmetrics.ConfusionMatrix,
-    "cohen_kappa": torchmetrics.CohenKappa
+    "cohen_kappa": torchmetrics.CohenKappa,
 }
 
 LOSSES = {

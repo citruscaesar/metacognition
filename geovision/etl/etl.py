@@ -4,9 +4,9 @@ from threading import local
 
 def reset_dir(dir_path: str | Path) -> None:
     dir_path = Path(dir_path)
-    if dir_path.is_dir():
+    if dir_path.is_dir() and dir_path.exists():
         rmtree(dir_path.as_posix())
-    dir_path.mkdir()
+    dir_path.mkdir(parents = True)
 
 def validate_dir(dir_path: str | Path) -> Path:
     dir_path = Path(dir_path)

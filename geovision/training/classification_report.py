@@ -34,7 +34,7 @@ def classification_report_df(confusion_matrix: NDArray, class_names: Optional[tu
         class_names = tuple(str(c) for c in range(num_classes))
 
     # Add Additional Metrics Only Before Support
-    df = pd.DataFrame(columns = ["class_name", "precision", "recall", "f1", "support"])
+    df = pd.DataFrame(columns = ["class_name", "precision", "recall", "jaccard", "f1", "support"])
     for c in range(num_classes):
         tp = confusion_matrix[c, c]
         p_hat = np.sum(confusion_matrix[:, c])
@@ -42,19 +42,19 @@ def classification_report_df(confusion_matrix: NDArray, class_names: Optional[tu
 
         precision = (tp / p_hat) if p_hat > 0 else 0
         recall = (tp / p) if p > 0 else 0
+        iou = tp / (p+p_hat-tp) if (p+p_hat-tp) > 0 else 0
         f1 =  (2*tp) / (p+p_hat) if (p+p_hat) > 0 else 0
-        #iou = tp / (p+p_hat-tp) if (p+p_hat-tp) > 0 else 0
-        #dice = 
         support = np.sum(p)
 
-        df.loc[len(df.index)] = [class_names[c].lower(), precision, recall, f1, support]
+        df.loc[len(df.index)] = [class_names[c].lower(), precision, recall, iou, f1, support]
         
     accuracy = confusion_matrix.trace() / num_samples
-    #weighted_metric = np.dot(metric, support) 
-    weighted_metrics = np.matmul((df["support"] / df["support"].sum()).to_numpy(), df[["precision", "recall", "f1"]].to_numpy())
 
-    df.loc[len(df.index)] = ["accuracy", accuracy, accuracy, accuracy, num_samples]
-    df.loc[len(df.index)] = ["macro", df["precision"].mean(), df["recall"].mean(), df["f1"].mean(), num_samples]
+    #NOTE weighted_metric = np.dot(metric, support) 
+    weighted_metrics = np.matmul((df["support"] / df["support"].sum()).to_numpy(), df[["precision", "recall", "jaccard", "f1"]].to_numpy())
+
+    df.loc[len(df.index)] = ["accuracy", accuracy, accuracy, accuracy, accuracy, num_samples]
+    df.loc[len(df.index)] = ["macro", df["precision"].mean(), df["recall"].mean(), df["jaccard"].mean(), df["f1"].mean(), num_samples]
     df.loc[len(df.index)] = ["weighted", *weighted_metrics, num_samples]
     df.set_index("class_name", inplace = True)
     return df
@@ -77,6 +77,7 @@ def confusion_matrix_plot(confusion_matrix: NDArray, ax: Axes) -> Any:
         for c in range(num_classes):
             ax.text(y = r, x = c, s = str(confusion_matrix[r, c]), ha = "center", va = "center", fontsize=_font_size)
 
+    #plt.close(ax.get_figure())
     return ax.get_figure(), ax
 
 def metric_table_plot(df: pd.DataFrame, ax: Axes, table_scaling: Optional[tuple[float, float]] = (1., 1.)):
@@ -84,7 +85,7 @@ def metric_table_plot(df: pd.DataFrame, ax: Axes, table_scaling: Optional[tuple[
     table = ax.table(
         cellText = df.round(3).values, # type: ignore
         rowLabels = tuple(f"{i}: {c}" for i, c in enumerate(class_names)) + ("accuracy", "macro avg", "weighted avg"),
-        colLabels = ["precision", "recall", "f1", "support"],
+        colLabels = ["precision", "recall", "jaccard", "f1", "support"],
         cellLoc = "center",
         rowLoc = "center",
         loc = "center",
@@ -94,7 +95,7 @@ def metric_table_plot(df: pd.DataFrame, ax: Axes, table_scaling: Optional[tuple[
     table.auto_set_font_size(False)
     table.set_fontsize(10) 
     ax.set_axis_off()
-
+    #plt.close(ax.get_figure())
     return ax.get_figure(), ax
 
 def classification_report_plot(
@@ -119,11 +120,11 @@ def classification_report_plot(
         figsize = (18, 10)
         table_scaling = (0.7, 2)
     else:
-        figsize = (20, 15)
+        figsize = (21, 15)
         table_scaling = (0.6, 1.7)
 
     fig, (left, right) =  plt.subplots(1, 2, figsize = figsize, width_ratios=(.7, .3))
-    plt.title(f"Classification Report, step={step}-epoch={epoch}", loc = "center")
+    fig.suptitle(f"Classification Report, step={step}-epoch={epoch}")
     confusion_matrix_plot(confusion_matrix, left);
     metric_table_plot(classification_report_df(confusion_matrix, class_names), right, table_scaling);
     plt.tight_layout()
