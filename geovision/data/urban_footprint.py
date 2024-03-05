@@ -290,6 +290,7 @@ class HDF5Segmentation(Dataset):
         with h5py.File(self.hdf5_path, "r") as f:
             image = f[self.image_dataset_name][scene["scene_idx"]] # type: ignore
             mask = f[self.mask_dataset_name][scene["scene_idx"]] # type: ignore
+            mask = self.identity_matrix[where(mask.squeeze() == 255, 1, 0)]
         return *self.common_transform([self.image_transform(image), self.target_transform(mask)]), scene["df_idx"] 
 
     def __get_tile(self, idx: int):
@@ -301,6 +302,7 @@ class HDF5Segmentation(Dataset):
             else:
                 image = f[self.image_dataset_name][tile["scene_idx"], tile["height_begin"]:tile["height_end"], tile["width_begin"]:tile["width_end"]] # type: ignore
                 mask = f[self.mask_dataset_name][tile["scene_idx"], tile["height_begin"]:tile["height_end"], tile["width_begin"]:tile["width_end"]] # type: ignore
+            mask = self.identity_matrix[where(mask.squeeze() == 255, 1, 0)]
         return *self.common_transform([self.image_transform(image), self.target_transform(mask)]), tile["df_idx"]
 
     def __get_padded_image(self, dataset: h5py.Dataset, idx: int, height_begin: int, height_end: int, width_begin: int, width_end: int) -> NDArray:
