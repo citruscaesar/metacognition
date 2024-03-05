@@ -18,12 +18,12 @@
 
         df: DataFrame, represents the dataset (is logged for reproducibility)
             df.columns = image_path, mask_path/label_(str+idx), split
+            all_paths in df should be string type
 
         split_df: DataFrame, split view of df
             split_df.columns = image_path, mask_path/label_idx, split, df_idx
             split_df["df_idx"] acts as a foreign key and references df.index
             all paths in split_df must be absolute paths
-            all paths in split_df must be of the string type, as pathlib objects are not pickleable
     
     Input Attrs: 
         root: Path,

@@ -298,5 +298,5 @@ class ImageDatasetDataModule(LightningDataModule):
 
         return f"""
         \n{mode}\nConfigured For: {self.task}
-        \nRandom Seed: {self.random_seed}\n{split}\nBatch Size: {self.batch_size}{band_combination}{tiled}
+        \nRandom Seed: {self.random_seed}\n{split}\nBatch Size(//grad_accum): {self.batch_size}{band_combination}{tiled}
         """ 

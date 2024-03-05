@@ -32,6 +32,8 @@ class ImagenetteClassification(Dataset):
         'n01440764': 'tench',
     }
 
+    NAME = "imagenette"
+    TASK = "classification"
     NUM_CLASSES = len(CLASS_LABELS) 
     CLASS_NAMES = tuple(sorted(CLASS_LABELS.values()))
 
@@ -84,7 +86,7 @@ class ImagenetteClassification(Dataset):
             .pipe(self.__subset_df)
             .pipe(self.__prefix_root_to_df)
         )
-        self.df = self.df.assign(image_path = lambda df: str(df["image_path"]))
+        self.df = self.df.assign(image_path = lambda df: df["image_path"].apply(lambda x: str(x)))
 
     def __len__(self):
         return len(self.split_df)

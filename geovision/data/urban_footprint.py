@@ -4,23 +4,32 @@ from numpy import newaxis, pad, eye, where
 from torch import float32, int64
 from pandas import DataFrame, concat
 from imageio.v3 import imread, imwrite
-from torch.utils.data import Dataset
 from torchvision.transforms.v2 import(
     Compose, ToImage, ToDtype, Identity)
-from torchvision.datasets.utils import download_url
 from streaming import MDSWriter, StreamingDataset
 from streaming.base.util import clean_stale_shared_memory
-from tqdm import tqdm
 
 import h5py
-import zipfile
-
-from etl.extract import extract_multivolume_archive 
 
 from typing import Optional, Literal
 from numpy.typing import NDArray
 from torch import Tensor
 from torchvision.transforms.v2 import Transform
+
+class Dataset:
+    def _subset_df(self, df: DataFrame, split: str):
+        if split == "all":
+            return df
+        elif split == "trainval":
+            return (df[(df.split == "train") | (df.split == "val")].reset_index(drop=True)) # type: ignore
+        return (df[df.split == split].reset_index(drop=True))
+
+    def _prefix_root_to_df(self, df: DataFrame, root: Path) -> DataFrame:
+        return (
+            df
+            .assign(image_path = lambda df: df["image_path"].apply(lambda x: str(root/x)))
+            .assign(mask_path = lambda df: df["mask_path"].apply(lambda x: str(root/x)))
+        ) 
 
 class ImageFolderSegmentation(Dataset):
     DEFAULT_IMAGE_TRANSFORM = Compose([
@@ -39,7 +48,7 @@ class ImageFolderSegmentation(Dataset):
             self,
             root: Path,
             df: Optional[DataFrame] = None,
-            split: str = "train",
+            split: Literal["train", "val", "trainval", "test", "unsup", "all"] = "all",
             test_split: float = 0.2,
             val_split: float = 0.2,
             random_seed: int = 42,
@@ -59,25 +68,31 @@ class ImageFolderSegmentation(Dataset):
         self.common_transform = common_transform or self.DEFAULT_COMMON_TRANSFORM 
         self.identity_matrix = eye(2, dtype = "int")
 
-        if isinstance(df, DataFrame):
-            self.df = df
-        else:
-            self.df = self.__segmentation_df()
+        print(f"{self.split} dataset at {self.root}")
+
+        self.df = df if isinstance(df, DataFrame) else self.__segmentation_df()
         self.df = (
             self.df
-            .pipe(self.__subset_df)
-            .pipe(self.__prefix_root_to_df)
+            .assign(df_idx = lambda df: df.index)
+            .assign(image_path = lambda df: df["image_path"].astype("string"))
+            .assign(mask_path = lambda df: df["mask_path"].astype("string"))
+        )
+
+        self.split_df = (
+            self.df
+            .pipe(self._subset_df, split)
+            .pipe(self._prefix_root_to_df, root)
         )
         
     def __len__(self):
-        return len(self.df)
+        return len(self.split_df)
 
-    def __getitem__(self, idx) -> tuple[Tensor, Tensor, str]:
-        datapoint = self.df.iloc[idx]
-        image = imread(datapoint["image_path"]) # type: ignore
-        mask = imread(datapoint["mask_path"]).squeeze()
+    def __getitem__(self, idx) -> tuple[Tensor, Tensor, int]:
+        row_idx = self.split_df.iloc[idx]
+        image = imread(row_idx["image_path"]) # type: ignore
+        mask = imread(row_idx["mask_path"]).squeeze()
         mask = self.identity_matrix[where(mask == 255, 1, 0)]
-        return *self.common_transform([self.image_transform(image), self.target_transform(mask)]), str(datapoint["name"])
+        return *self.common_transform([self.image_transform(image), self.target_transform(mask)]), row_idx["df_idx"] 
     
     def __segmentation_df(self) -> DataFrame:
         """Implements the Random Split Strategy """
@@ -118,17 +133,7 @@ class ImageFolderSegmentation(Dataset):
                     #.sort_values("image_path")
                     #.reset_index(drop = True)
                     .drop("location", axis = 1))
-    
-    def __subset_df(self, df: DataFrame) -> DataFrame:
-        if self.split == "trainval":
-            return (df.loc[(df.split == "train") | (df.split == "val")].reset_index(drop=True)) # type: ignore
-        return (df.loc[df.split == self.split].reset_index(drop=True))
-
-    def __prefix_root_to_df(self, df: DataFrame) -> DataFrame:
-        df["image_path"] = df["image_path"].apply(lambda x: self.root / x)
-        df["mask_path"] = df["mask_path"].apply(lambda x: self.root / x)
-        return df
-
+ 
     def __get_location(self, filename: str) -> str:
         return (''.join([i for i in filename if not i.isdigit()])
                   .removesuffix("_"))
@@ -236,7 +241,7 @@ class HDF5Segmentation(Dataset):
             image_dataset_name: str,
             mask_dataset_name: str,
             df: DataFrame,
-            split: Literal["train", "val", "trainval", "test", "unsup"] = "train",
+            split: Literal["train", "val", "trainval", "test", "unsup", "all"] = "train",
             image_transform: Optional[Transform] = None,
             target_transform: Optional[Transform] = None,
             common_transform: Optional[Transform] = None,
@@ -246,7 +251,7 @@ class HDF5Segmentation(Dataset):
         assert hdf5_path.is_file(), "provide .hdf5 dataset path"
         assert isinstance(df, DataFrame), "not a dataframe"
         assert {"scene_idx", "name", "split"}.issubset(df.columns), "missing columns"
-        assert split in ("train", "val", "trainval", "test", "unsup"), "invalid split"
+        assert split in ("train", "val", "trainval", "test", "unsup", "all"), "invalid split"
 
         self.hdf5_path = hdf5_path
         self.image_dataset_name = image_dataset_name
@@ -260,20 +265,22 @@ class HDF5Segmentation(Dataset):
             self.HEIGHT = f[self.image_dataset_name].shape[1] # type: ignore
             self.WIDTH = f[self.image_dataset_name].shape[2] # type: ignore
 
-        self.df = (
-            df
-            .pipe(self.__subset_df, split)
-            .reset_index(drop = True)
-        ) 
+        self.df = df.assign(df_idx = lambda df: df.index)
+            
+        self.split_df = (
+            self.df
+            .pipe(self._subset_df, split)
+        )
+        
         if {"height_begin", "height_end", "width_begin", "width_end"}.issubset(self.df.columns):
-            print("Tiled Dataset")
+            print(f"{split} tiled dataset at {self.hdf5_path}")
             self.is_tiled = True
         else:
-            print("Scene Dataset")
+            print(f"{split} scene dataset at {self.hdf5_path}")
             self.is_tiled = False
-
+        
     def __len__(self):
-        return len(self.df)
+        return len(self.split_df)
     
     def __getitem__(self, idx: int):
         return (self.__get_tile(idx) if self.is_tiled else self.__get_scene(idx))
@@ -283,7 +290,7 @@ class HDF5Segmentation(Dataset):
         with h5py.File(self.hdf5_path, "r") as f:
             image = f[self.image_dataset_name][scene["scene_idx"]] # type: ignore
             mask = f[self.mask_dataset_name][scene["scene_idx"]] # type: ignore
-        return *self.common_transform([self.image_transform(image), self.target_transform(mask)]), str(scene["name"])
+        return *self.common_transform([self.image_transform(image), self.target_transform(mask)]), scene["df_idx"] 
 
     def __get_tile(self, idx: int):
         tile = self.df.iloc[idx]
@@ -294,7 +301,7 @@ class HDF5Segmentation(Dataset):
             else:
                 image = f[self.image_dataset_name][tile["scene_idx"], tile["height_begin"]:tile["height_end"], tile["width_begin"]:tile["width_end"]] # type: ignore
                 mask = f[self.mask_dataset_name][tile["scene_idx"], tile["height_begin"]:tile["height_end"], tile["width_begin"]:tile["width_end"]] # type: ignore
-        return *self.common_transform([self.image_transform(image), self.target_transform(mask)]), str(tile["name"])
+        return *self.common_transform([self.image_transform(image), self.target_transform(mask)]), tile["df_idx"]
 
     def __get_padded_image(self, dataset: h5py.Dataset, idx: int, height_begin: int, height_end: int, width_begin: int, width_end: int) -> NDArray:
         return pad(
@@ -303,10 +310,3 @@ class HDF5Segmentation(Dataset):
             "constant",
             constant_values = 0
         )
-
-    def __subset_df(self, df: DataFrame, split: str) -> DataFrame:
-        if split == "trainval":
-            return df[(df.split == "train") | (df.split == "val")]
-        else:
-            assert split in df.split.unique(), "split not found in dataframe"
-            return df[df.split == split]

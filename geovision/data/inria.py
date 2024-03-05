@@ -1,14 +1,9 @@
 import shutil
 from pathlib import Path
 from numpy import newaxis, pad, uint8, where, eye
-from torch import float32, int64
 from pandas import DataFrame, concat
 from imageio.v3 import imread, imwrite
-from torchvision.transforms.v2 import(
-    Compose, ToImage, ToDtype, Identity)
 from torchvision.datasets.utils import download_url
-from streaming import MDSWriter, StreamingDataset
-from streaming.base.util import clean_stale_shared_memory
 from tqdm.notebook import tqdm
 
 import h5py
@@ -19,7 +14,6 @@ from .urban_footprint import ImageFolderSegmentation, StreamingSegmentation, HDF
 
 from typing import Optional, Literal
 from numpy.typing import NDArray
-from torch import Tensor
 from torchvision.transforms.v2 import Transform
 
 class InriaBase:
@@ -329,6 +323,10 @@ class InriaBase:
                 shutil.copyfileobj(src_file_obj, dst_file_obj)
     
 class InriaImageFolder(ImageFolderSegmentation):
+    NUM_CLASSES = 2
+    CLASS_NAMES = ("Foreground", "Background")
+    NAME = "urban_footprint"
+    TASK = "segmentation"
     def __init__(
             self,
             root: Path,
@@ -365,18 +363,18 @@ class InriaImageFolder(ImageFolderSegmentation):
 
         assert split in ("train", "val", "test", "trainval", "unsup"), "Invalid Split"
         if isinstance(df, DataFrame):
-            self.df = df
+            _df = df
         elif tile_size is not None and tile_stride is not None:
             print("Tiled Dataset")
-            self.df = InriaBase.tiled_df(**_kwargs).pipe(self.__add_tile_paths, tile_size, tile_stride)
+            _df = InriaBase.tiled_df(**_kwargs).pipe(self.__add_tile_paths, tile_size, tile_stride)
         else:
             print("Scene Dataset")
-            self.df = InriaBase.scene_df(**_kwargs).pipe(self.__add_scene_paths)
-        assert {"name", "image_path", "mask_path"}.issubset(self.df.columns), "Missing Columns"
+            _df = InriaBase.scene_df(**_kwargs).pipe(self.__add_scene_paths)
+        assert {"name", "image_path", "mask_path"}.issubset(_df.columns), "Missing Columns"
 
         super().__init__(
             root = root, 
-            df = self.df,
+            df = _df,
             split = split,
             image_transform = image_transform,
             target_transform = target_transform,
@@ -406,6 +404,10 @@ class InriaStreaming(StreamingSegmentation):
         super().__init__(**kwargs)
 
 class InriaHDF5(HDF5Segmentation):
+    NUM_CLASSES = 2
+    CLASS_NAMES = ("Building", "Background")
+    NAME = "urban_footprint"
+    TASK = "segmentation"
     def __init__(
             self,
             root: Path,
@@ -429,7 +431,6 @@ class InriaHDF5(HDF5Segmentation):
             "tile_size": tile_size,
             "tile_stride": tile_stride,
         }
-
         #if download:
         #   etl.s3_interface.download_from_s3("s3://segmentation/datasets/urban-footprint/inria.h5", root)
 

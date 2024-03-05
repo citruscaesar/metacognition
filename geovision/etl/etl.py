@@ -8,11 +8,10 @@ def reset_dir(dir_path: str | Path) -> None:
         rmtree(dir_path.as_posix())
     dir_path.mkdir(parents = True)
 
-def validate_dir(dir_path: str | Path) -> Path:
-    dir_path = Path(dir_path)
-    if not dir_path.is_dir():
-        dir_path.mkdir(parents = True)
-    return dir_path
+def validate_dir(*args) -> Path:
+    path = Path(*args)
+    path.mkdir(exist_ok=True, parents=True)
+    return path
 
 def is_valid_remote(remote_url: str) -> bool:
     assert isinstance(remote_url, str), "URL must be of string type"
