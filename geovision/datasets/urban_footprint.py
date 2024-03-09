@@ -17,9 +17,15 @@ from torch import Tensor
 from torchvision.transforms.v2 import Transform
 
 class Dataset:
+    def __getitem__(self, idx: int):
+        pass
+
+    def __len__(self) -> int:
+        pass
+
     def _subset_df(self, df: DataFrame, split: str):
         if split == "all":
-            return df
+            return df[df["split"] != "unsup"]
         elif split == "trainval":
             return (df[(df.split == "train") | (df.split == "val")].reset_index(drop=True)) # type: ignore
         return (df[df.split == split].reset_index(drop=True))

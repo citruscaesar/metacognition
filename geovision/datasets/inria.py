@@ -30,59 +30,11 @@ class InriaBase:
     IMAGE_SHAPE = (5000, 5000, 3)
 
     @classmethod
-    def scene_df(cls, val_split: float, test_split: float, random_seed: int, **kwargs) -> DataFrame:
-        return concat([cls.supervised_df(val_split, test_split, random_seed),
-                       cls.unsupervised_df()])
-                                     
-    @classmethod
-    def tiled_df(cls, val_split: float, test_split: float, random_seed: int, tile_size: tuple[int, int], tile_stride: tuple[int, int], **kwargs) -> DataFrame:
-        assert isinstance(tile_size, tuple) and len(tile_size) == 2, "Invalid Tile Size"
-        assert isinstance(tile_stride, tuple) and len(tile_stride) == 2, "Invalid Tile Stride"
-
-        df = cls.scene_df(val_split, test_split, random_seed)
-        assert {"scene_idx", "name", "split"}.issubset(df.columns), f"scene_df missing columns"
-
-        tile_dfs = list()
-        for _, row in df.iterrows():
-            table: dict[str, list] = {
-                "name": list(),
-                "height_begin": list(),
-                "height_end": list(),
-                "width_begin": list(),
-                "width_end": list()
-            }
-
-            scene_name = Path(row["name"])
-            for x in range(0, cls.__num_windows(cls.IMAGE_SHAPE[0], tile_size[0], tile_stride[0])):
-                for y in range(0, cls.__num_windows(cls.IMAGE_SHAPE[1], tile_size[1], tile_stride[1])):
-                    height_begin = x*tile_stride[0]
-                    height_end = x*tile_stride[0]+tile_size[0]
-                    width_begin = y*tile_stride[1]
-                    width_end = y*tile_stride[1]+tile_size[1]
-                    name = f"{scene_name.stem}-{height_begin}-{height_end}-{width_begin}-{width_end}{scene_name.suffix}"
-
-                    table["name"].append(name)
-                    table["height_begin"].append(height_begin)
-                    table["height_end"].append(height_end)
-                    table["width_begin"].append(width_begin)
-                    table["width_end"].append(width_end)
-
-            tile_dfs.append(
-                DataFrame(table)
-                .assign(scene_idx = row["scene_idx"])
-                .assign(split = row["split"]))
-
-        return (
-            concat(tile_dfs)
-            [["scene_idx", "name", "split", "height_begin", "height_end", "width_begin", "width_end"]]
-        )
-
-    @classmethod
     def supervised_df(cls, val_split: float, test_split: float, random_seed: int, **kwargs) -> DataFrame:
         sup_file_loc_pairs = [(f"{x}{num}.tif", x) for x in cls.SUPERVISED_LOCATIONS for num in range(1, 37)]
         return (DataFrame({"file": sup_file_loc_pairs})
                 .assign(scene_idx = lambda df: df.index)
-                .assign(name = lambda df: df.file.apply(
+                .assign(scene_name = lambda df: df.file.apply(
                     lambda x: x[0]))
                 .assign(loc = lambda df: df.file.apply(
                     lambda x: x[1]))
@@ -92,10 +44,67 @@ class InriaBase:
     @classmethod
     def unsupervised_df(cls) -> DataFrame:
         unsup_files = [f"{x}{num}.tif" for x in cls.UNSUPERVISED_LOCATIONS for num in range(1, 37)]
-        return (DataFrame({"name": unsup_files})
+        return (DataFrame({"scene_name": unsup_files})
                 .assign(scene_idx = lambda df: df.index)
                 .assign(split = "unsup")
-                [["scene_idx", "name", "split"]])
+                [["scene_idx", "scene_name", "split"]])
+
+    @classmethod
+    def scene_df(cls, val_split: float, test_split: float, random_seed: int, **kwargs) -> DataFrame:
+        return (
+            concat([cls.supervised_df(val_split, test_split, random_seed), cls.unsupervised_df()])
+            .assign(hbeg = 0)
+            .assign(hend = 5000)
+            .assign(wbeg = 0)
+            .assign(wend = 5000)
+            .reset_index(drop = True)
+        )
+                                     
+    @classmethod
+    def tiled_df(cls, val_split: float, test_split: float, random_seed: int, tile_size: tuple[int, int], tile_stride: tuple[int, int], **kwargs) -> DataFrame:
+        assert isinstance(tile_size, tuple) and len(tile_size) == 2, "Invalid Tile Size"
+        assert isinstance(tile_stride, tuple) and len(tile_stride) == 2, "Invalid Tile Stride"
+
+        df = cls.scene_df(val_split, test_split, random_seed)
+        assert {"scene_idx", "scene_name", "split"}.issubset(df.columns), f"scene_df missing columns"
+
+        tile_dfs = list()
+        for _, row in df.iterrows():
+            table: dict[str, list] = {
+                "tile_name": list(),
+                "scene_name": list(),
+                "hbeg": list(),
+                "hend": list(),
+                "wbeg": list(),
+                "wend": list()
+            }
+
+            scene_name = Path(row["scene_name"])
+            for x in range(0, cls.__num_windows(cls.IMAGE_SHAPE[0], tile_size[0], tile_stride[0])):
+                for y in range(0, cls.__num_windows(cls.IMAGE_SHAPE[1], tile_size[1], tile_stride[1])):
+                    hbeg = x*tile_stride[0]
+                    hend = x*tile_stride[0]+tile_size[0]
+                    wbeg = y*tile_stride[1]
+                    wend = y*tile_stride[1]+tile_size[1]
+                    name = f"{scene_name.stem}-{hbeg}-{hend}-{wbeg}-{wend}{scene_name.suffix}"
+
+                    table["tile_name"].append(name)
+                    table["scene_name"].append(scene_name.name)
+                    table["hbeg"].append(hbeg)
+                    table["hend"].append(hend)
+                    table["wbeg"].append(wbeg)
+                    table["wend"].append(wend)
+
+            tile_dfs.append(
+                DataFrame(table)
+                .assign(scene_idx = row["scene_idx"])
+                .assign(split = row["split"]))
+
+        return (
+            concat(tile_dfs)
+            .reset_index(drop = True)
+            [["scene_idx", "scene_name", "tile_name", "split", "hbeg", "hend", "wbeg", "wend"]]
+        )
 
     @classmethod
     def show_tiles_along_one_dim(cls, dim_len: int, kernel: int, stride: int, padding: Optional[int] = None) -> None:

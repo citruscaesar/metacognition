@@ -2,11 +2,12 @@ from shutil import rmtree
 from pathlib import Path
 from threading import local
 
-def reset_dir(dir_path: str | Path) -> None:
-    dir_path = Path(dir_path)
-    if dir_path.is_dir() and dir_path.exists():
-        rmtree(dir_path.as_posix())
-    dir_path.mkdir(parents = True)
+def reset_dir(*args) -> Path:
+    path = Path(*args)
+    if path.is_dir() and path.exists():
+        rmtree(path.as_posix())
+    path.mkdir(parents = True)
+    return path
 
 def validate_dir(*args) -> Path:
     path = Path(*args)
