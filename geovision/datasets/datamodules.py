@@ -102,7 +102,7 @@ class ImageDatasetDataModule(LightningDataModule):
     def prepare_data(self):
         if not self.is_remote and not self.is_streaming:
             if is_empty(self.local_path):
-                print("Preparing_Data")
+                print("dataset not found in root, calling download")
                 self.dataset_constructor(
                     download = True, **self.__get_local_kwargs()
                 ) # type: ignore

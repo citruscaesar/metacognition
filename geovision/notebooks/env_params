@@ -1,0 +1,5 @@
+WANDB_API_KEY=3ffbfe896131bec2ec98f0beba538b6a0479995a
+AWS_ACESS_KEY_ID=251f910f4fd7ab94e5f315f8ea470055 
+AWS_SECRET_ACESS_KEY=54285046b191edecb42b33c2685aaa41 
+AWS_ENDPOINT_URL=https://sin1.contabostorage.com/   
+S3_ENDPOINT_URL=https://sin1.contabostorage.com
