@@ -2,10 +2,11 @@ import os, shutil, h5py, zipfile
 from pathlib import Path
 from pandas import DataFrame, concat
 from torch import Tensor, float32
-from numpy import uint8, eye, where, pad, concatenate 
-from imageio.v3 import imread
+from numpy import uint8, eye, where, pad, dstack, clip, dsplit
+from imageio.v3 import imread, imwrite
 from litdata import optimize, StreamingDataset
 from tqdm.auto import tqdm
+from etl.etl import validate_dir
 from etl.extract import extract_multivolume_archive
 from torch.utils.data import Dataset
 from torchvision.transforms.v2 import Transform, Compose, ToImage, ToDtype, Identity
@@ -55,10 +56,11 @@ class InriaSegmentation(Dataset):
     def scene_df(cls, val_split: float = 0.2, test_split: float = 0.2, random_seed: int = 42, **kwargs) -> DataFrame:
         return (
             concat([cls.supervised_df(val_split, test_split, random_seed), cls.unsupervised_df()])
-            .assign(hbeg = 0)
-            .assign(hend = 5000)
-            .assign(wbeg = 0)
-            .assign(wend = 5000)
+            .assign(hbeg = 0).assign(hend = 5000).assign(wbeg = 0).assign(wend = 5000)
+            .assign(tile_name = lambda df: df.apply(
+                lambda x: f"{x['scene_name'].removesuffix('.tif')}_{x['hbeg']}_{x['hend']}_{x['wbeg']}_{x['wend']}.tif",
+                axis = 1))
+            [["scene_idx", "scene_name", "tile_name", "split", "hbeg", "hend", "wbeg", "wend"]]
             .reset_index(drop = True)
         )
                                      
@@ -88,7 +90,7 @@ class InriaSegmentation(Dataset):
                     hend = x*tile_stride[0]+tile_size[0]
                     wbeg = y*tile_stride[1]
                     wend = y*tile_stride[1]+tile_size[1]
-                    name = f"{scene_name.stem}-{hbeg}-{hend}-{wbeg}-{wend}{scene_name.suffix}"
+                    name = f"{scene_name.stem}_{hbeg}_{hend}_{wbeg}_{wend}{scene_name.suffix}"
 
                     table["tile_name"].append(name)
                     table["scene_name"].append(scene_name.name)
@@ -135,41 +137,121 @@ class InriaSegmentation(Dataset):
             print(f"Deleting downloaded .7z archives from {downloads}")
             shutil.rmtree(str(downloads))
 
+    @staticmethod
+    def read_image(src_uri: str, hbeg:int, hend:int, wbeg:int, wend:int):
+        image = imread(src_uri, extension = ".tif")
+        H, W = image.shape[0], image.shape[1]
+        image = image[hbeg: min(hend, H), wbeg: min(wend, W)].copy()
+        if hend > H or wend > W:
+            if image.ndim == 2: 
+                image = pad(image, ((0, max(0, hend - H)), (0, max(0, wend - W))), "constant", constant_values = 0).copy()
+            else:
+                image = pad(image, ((0, max(0, hend - H)), (0, max(0, wend - W)), (0, 0)), "constant", constant_values = 0).copy()
+        return image
+
     @classmethod
-    def write_to_files(cls, root: Path, low_storage: bool):
-        image_dir = root / "scenes" / "images"
-        image_dir.mkdir(exist_ok=True, parents=True)
-        mask_dir = root / "scenes" / "masks"
-        mask_dir.mkdir(exist_ok=True, parents=True)
-        unsup_dir = root / "scenes" / "unsup"
-        unsup_dir.mkdir(exist_ok=True, parents=True)
+    def write_to_files(cls, root: Path, target: Path, df: DataFrame, **kwargs):
+        r"""
+        Parameters
+        ----------
+        root: Path
+            Directory where "NEW2-AerialImageDataset.zip" is located
 
-        dataset_archive = root/cls.DATASET_ARCHIVE_NAME
-        assert dataset_archive.is_file(), "Dataset Archive Missing"
+        target: Path
+            Directory to write prepared files to, additional subdirectories are
+            created for image, mask and unsupervised tiles 
 
-        with zipfile.ZipFile(dataset_archive) as zf:
-            sup_filenames = [f"{x}{num}.tif" for x in cls.SUPERVISED_LOCATIONS for num in range(1, 37)]
-            for filename in tqdm(sup_filenames, desc = "Inria Supervised Progress"): 
-                cls.__extract_image_to_dst(
-                    src_path = Path("AerialImageDataset","train","images", filename).as_posix(), 
-                    dst_path = image_dir/filename, 
-                    zip_file_obj= zf)
+        df: DataFrame
+            DataFrame with appropriate columns containing train-val-test splits
+            df.columns = {scene_name, tile_name, split, hbeg, hend, wbeg, wend}
 
-                cls.__extract_image_to_dst(
-                    src_path = Path("AerialImageDataset","train","gt", filename).as_posix(), 
-                    dst_path = mask_dir/filename, 
-                    zip_file_obj= zf)
+        **kwargs: dict[str, Any], optional
+            for being lazy 
+        """
+        DATASET_ZIP = root / "NEW2-AerialImageDataset.zip"
+        assert DATASET_ZIP.is_file(), f"Dataset Archive Missing @ [{DATASET_ZIP}]"
+        IMAGES = validate_dir(target, "images")
+        MASKS = validate_dir(target, "masks")
+        UNSUP = validate_dir(target, "unsupervised")
+
+        for _, row in tqdm(df.iterrows(), desc = "Writing to Files", total = len(df)):
+            _crop_dims = (row["hbeg"], row["hend"], row["wbeg"], row["wend"])
+            if row["split"] == "unsup":
+                imwrite(
+                    uri = str(UNSUP/row["tile_name"]),
+                    image = cls.read_image(
+                        (DATASET_ZIP/"AerialImageDataset"/"test"/"images"/row["scene_name"]).as_posix(), *_crop_dims),
+                    extension = ".tif"
+                )
+            else:
+                imwrite(
+                    uri = str(IMAGES/row["tile_name"]),
+                    image = cls.read_image(
+                        (DATASET_ZIP/"AerialImageDataset"/"train"/"images"/row["scene_name"]).as_posix(), *_crop_dims),
+                    extension = ".tif"
+                )
+                imwrite(
+                    uri = str(MASKS/row["tile_name"]),
+                    image = cls.read_image(
+                        (DATASET_ZIP/"AerialImageDataset"/"train"/"gt"/row["scene_name"]).as_posix(), *_crop_dims),
+                    extension = ".tif"
+                )
+        df.to_csv(target/"dataset.csv", index = False)
+
+    @classmethod
+    def write_to_hdf(cls, root: Path, target: Path, df: DataFrame) -> None:
+        r"""
+        Parameters
+        ----------
+        root: Path
+            Directory where "NEW2-AerialImageDataset.zip" is located
+
+        target: Path
+            Directory to write prepared hdf5 file to 
+
+        df: DataFrame
+            DataFrame with appropriate columns containing train-val-test splits
+            df.columns = {scene_name, tile_name, split, hbeg, hend, wbeg, wend}
+
+        **kwargs: dict[str, Any], optional
+            to accomodate laziness
+        """
+
+        # bits * numimages * width * height * num_bands(RGB+Mask)
+        # size_in_bits = 8 * 180 * 5000 * 5000 * (3+3+2) 
+        # size_in_gigabytes = size_in_bits / (8 * 1024 * 1024 * 1024)
+        # ~33.52GB
+        DATASET_ZIP = root / "NEW2-AerialImageDataset.zip"
+        assert DATASET_ZIP.is_file(), f"Dataset Archive Missing @ [{DATASET_ZIP}]"
+        target = validate_dir(target)
+        HDF_DATASET = target / "inria.h5"
+
+        def get_dataset_dims(split_df: DataFrame) -> tuple[int, int, int, int]:
+            display(split_df)
+            row = split_df.iloc[0]
+            N = len(split_df)
+            H = row["hend"] - row["hbeg"]
+            W = row["wend"] - row["wbeg"]
+            B = 3 if split == "unsup" else 5
+            #print(f"{split} dataset dims: {N, H, W, B}")
+            return N, H, W, B
         
-            unsup_filenames = [f"{x}{num}.tif" for x in cls.UNSUPERVISED_LOCATIONS for num in range(1, 37)]
-            for filename in tqdm(unsup_filenames, desc = "Inria Unsupervised Progress"):
-                cls.__extract_image_to_dst(
-                    src_path = Path("AerialImageDataset","test","images", filename).as_posix(), 
-                    dst_path = unsup_dir/filename, 
-                    zip_file_obj= zf)
-
-        if low_storage:
-            print(f"Deleting Dataset Archive: {cls.DATASET_ARCHIVE_NAME}")
-            (dataset_archive).unlink()
+        with h5py.File(HDF_DATASET, 'w') as f:
+            for split in tqdm(df["split"].unique(), desc = "Splits", position=0):
+                split_df = df[df["split"] == split].reset_index(drop = True)
+                split_ds = f.create_dataset(split, get_dataset_dims(split_df), uint8)
+                for idx, row in tqdm(split_df.iterrows(), desc = "Images Written", position=1, leave = False, total = len(split_df)):
+                    _crop_dims = (row["hbeg"], row["hend"], row["wbeg"], row["wend"])
+                    if split == "unsup":
+                        split_ds[idx] = cls.read_image(
+                        (DATASET_ZIP/"AerialImageDataset"/"test"/"images"/row["scene_name"]).as_posix(), *_crop_dims),
+                    else:    
+                        image = cls.read_image(
+                            (DATASET_ZIP/"AerialImageDataset"/"train"/"images"/row["scene_name"]).as_posix(), *_crop_dims)
+                        mask = cls.read_image(
+                            (DATASET_ZIP/"AerialImageDataset"/"train"/"gt"/row["scene_name"]).as_posix(), *_crop_dims)
+                        mask = eye(2, dtype = uint8)[clip(mask, 0, 1)]
+                        split_ds[idx] = dstack([image, mask])
 
     @classmethod
     def write_to_litdata(cls, root: Path, shards: Path, df: Optional[DataFrame] = None, **kwargs):
@@ -230,35 +312,6 @@ class InriaSegmentation(Dataset):
                 num_workers = kwargs.get("num_workers", os.cpu_count()),
                 chunk_bytes = kwargs.get("shard_size_in_mb", 256) * 1024 * 1024,
             )
-        
-    @classmethod
-    def write_to_hdf(cls, root: Path) -> None:
-        # bits * num_images * width * height * num_bands(RGB+Mask)
-        # size_in_bits = 8 * 180 * 5000 * 5000 * (3+3+2) 
-        # size_in_gigabytes = size_in_bits / (8 * 1024 * 1024 * 1024)
-        # ~33.52GB
-        DATASET = root / cls.DATASET_ARCHIVE_NAME / "AerialImageDataset"
-        assert DATASET.parent.is_file(), "Dataset Archive Missing"
-
-        sup_df = cls.supervised_df() 
-        unsup_df = cls.unsupervised_df()
-
-        EYE = eye(2, dtype = uint8)
-        HDF_DATASET = root / "inria.h5"
-        with h5py.File(HDF_DATASET, 'w') as f:
-            f.create_dataset("supervised", (180, 5000, 5000, 5), uint8)
-            f.create_dataset("unsupervised", (180, 5000, 5000, 3), uint8)
-            for idx in tqdm(range(180), desc = "Progress"):
-                image = imread(DATASET/"train"/"images"/sup_df.iloc[idx]["scene_name"])
-                mask =  imread(DATASET/"train"/"gt"/sup_df.iloc[idx]["scene_name"])
-                mask = EYE[where(mask.squeeze() == 255, 1, 0).astype(uint8)]
-                image_mask = concatenate([image, mask], axis = -1, dtype = uint8) 
-                unsup = imread(DATASET/"test"/"images"/unsup_df.iloc[idx]["scene_name"])
-                f["supervised"][idx] = image_mask 
-                f["unsupervised"][idx] = unsup 
-                #print(image.shape, image.dtype, image.min().item(), image.max().item())
-                #print(mask.shape, mask.dtype, mask.min().item(), mask.max().item())
-                #print(image_mask.shape, image_mask.dtype, image_mask.min().item(), image_mask.max().item())
 
     @staticmethod
     def __assign_train_test_val_splits(df: DataFrame, val_split: float, test_split: float, random_seed: int) -> DataFrame:
@@ -303,13 +356,32 @@ class InriaSegmentation(Dataset):
             with zip_file_obj.open(src_path, "r") as src_file_obj:
                 shutil.copyfileobj(src_file_obj, dst_file_obj)
 
+    #@staticmethod
+    #def _subset_df(df: DataFrame, split: str):
+        #if split == "all":
+            #return df[df["split"] != "unsup"].reset_index(drop=True)
+        #elif split == "trainval":
+            #return (df[(df.split == "train") | (df.split == "val")].reset_index(drop=True)) # type: ignore
+        #return (df[df.split == split].reset_index(drop=True))
+
     @staticmethod
-    def _subset_df(df: DataFrame, split: str):
-        if split == "all":
-            return df[df["split"] != "unsup"]
+    def _subset_df(df: DataFrame, split: str) -> DataFrame:
+        train_split = df[df["split"] == "train"].reset_index(drop = True)
+        val_split = df[df["split"] == "val"].reset_index(drop = True)
+        test_split = df[df["split"] == "test"].reset_index(drop = True)
+        unsup_split = df[df["split"] == "unsup"].reset_index(drop = True)
+        if split == "train":
+            return train_split
+        elif split == "val":
+            return val_split
+        elif split == "test":
+            return test_split
+        elif split == "unsup":
+            return unsup_split
         elif split == "trainval":
-            return (df[(df.split == "train") | (df.split == "val")].reset_index(drop=True)) # type: ignore
-        return (df[df.split == split].reset_index(drop=True))
+            return concat([train_split, val_split], axis = 0)
+        elif split == "all":
+            return concat([train_split, val_split, test_split, unsup_split], axis = 0)
 
     @staticmethod
     def _prefix_root_to_df(df: DataFrame, root: Path) -> DataFrame:
@@ -340,6 +412,7 @@ class InriaImageFolder(InriaSegmentation):
 
         assert split in ("train", "val", "test", "trainval", "unsup", "all"), "Invalid Split"
         self.root = root
+        self.split = split
         self.image_transform = image_transform or self.DEFAULT_IMAGE_TRANSFORM
         self.target_transform = target_transform or self.DEFAULT_TARGET_TRANSFORM 
         self.common_transform = common_transform or self.DEFAULT_COMMON_TRANSFORM 
@@ -378,22 +451,35 @@ class InriaImageFolder(InriaSegmentation):
     def __len__(self):
         return len(self.split_df)
     
-    def __getitem__(self, idx: int) -> tuple[Tensor, Tensor, int]:
-        row_idx = self.split_df.iloc[idx]
-        crop_dims = (self.SCENE_SHAPE[0], self.SCENE_SHAPE[1], row_idx["hbeg"],row_idx["hend"],row_idx["wbeg"],row_idx["wend"])
-        image = self._read_image(row_idx["image_path"], *crop_dims)
-        mask = self._read_image(row_idx["mask_path"], *crop_dims)
-        mask = self.EYE[where(mask == mask.max(), 1, 0)]
-        return *self.common_transform([self.image_transform(image), self.target_transform(mask)]), row_idx["df_idx"] 
+# NumPy slicing creates a view instead of a copy as in the case of built-in Python sequences such as string, tuple and list.
+# Care must be taken when extracting a small portion from a large array which becomes useless after the extraction,
+# because the small portion extracted contains a reference to the large original array whose memory will not be released
+# until all arrays derived from it are garbage-collected.
+# In such cases an explicit copy() is recommended.
 
-    def _read_image(self, image_path: Path, H:int, W:int, hbeg: int, hend: int, wbeg: int, wend: int):
-        image = imread(image_path)[hbeg: min(hend, H), wbeg: min(wend, W)].squeeze()
+    def __getitem__(self, idx: int) -> tuple[Tensor, Tensor, int]:
+        row = self.split_df.iloc[idx]
+        H, W, hbeg, hend, wbeg, wend = self.SCENE_SHAPE[0], self.SCENE_SHAPE[1], row["hbeg"], row["hend"], row["wbeg"], row["wend"]
+
+        image_scene = imread(row["image_path"])
+        image = image_scene[hbeg: min(hend, H), wbeg: min(wend, W), :].copy()
+        del image_scene
+
+        mask_scene = imread(row["mask_path"])
+        mask = mask_scene[hbeg: min(hend, H), wbeg: min(wend, W)].copy()
+        del mask_scene
+
         if hend > H or wend > W:
-            if image.ndim < 3:
-                return pad(image, ((0, max(0, hend - H)), (0, max(0, wend - W))),"constant", constant_values = 0)
-            else: 
-                return pad(image, ((0, max(0, hend - H)), (0, max(0, wend - W)), (0, 0)), "constant", constant_values = 0)
-        return image
+            image = pad(image, ((0, max(0, hend - H)), (0, max(0, wend - W)), (0, 0)), "constant", constant_values = 0)
+            mask = pad(mask, ((0, max(0, hend - H)), (0, max(0, wend - W))), "constant", constant_values = 0)
+
+        mask = self.EYE[where(mask == mask.max(), 1, 0)]
+        image = self.image_transform(image)
+        mask = self.target_transform(mask)
+
+        if self.split == "train":
+            image, mask = self.common_transform([image, mask])
+        return image, mask, row["df_idx"]
 
 class InriaHDF5(InriaSegmentation):
     def __init__(
@@ -411,10 +497,10 @@ class InriaHDF5(InriaSegmentation):
             common_transform: Optional[Transform] = None,
             **kwargs,
         ) -> None:
-        root = root / "inria.h5"
-        assert split in ("train", "val", "test", "trainval", "unsup", "all"), "invalid split"
-        assert root.is_file(), f"inria.h5 not found in root: {root.parent}"
+        assert root.is_file() and (root.suffix == ".h5" or root.suffix == ".hdf5"), f"{root} does not point to an .h5/.hdf5 file"
+        assert split in ("train", "val", "test", "unsup", "trainval", "all"), f"provided split [{split}] is invalid"
         self.root = root
+        self.split = split
         self.image_transform = image_transform or self.DEFAULT_IMAGE_TRANSFORM
         self.target_transform = target_transform or self.DEFAULT_TARGET_TRANSFORM 
         self.common_transform = common_transform or self.DEFAULT_COMMON_TRANSFORM 
@@ -438,40 +524,29 @@ class InriaHDF5(InriaSegmentation):
             self.df = self.scene_df(**experiment_kwargs)
 
         assert {"scene_idx", "split", "hbeg", "hend", "wbeg", "wend"}.issubset(self.df.columns), "incorrect dataframe schema"
-        self.df = (
-            self.df
-            .assign(image_path = lambda df: df.apply(lambda x: str(Path("images", x["scene_name"])) if x["split"] != "unup" else str(Path("unsup", x["scene_name"])), axis = 1))
-            .assign(mask_path = lambda df: df["image_path"].apply(lambda x: str(Path(str(x).replace("image", "mask")))))
-            .assign(df_idx = lambda df: df.index)
-        )
-        self.split_df  = (
-            self.df
-            .pipe(self._subset_df, split)
-            .pipe(self._prefix_root_to_df, root)
-        )
+        self.df = self.df.assign(df_idx = lambda df: df.index)
+        self.split_df = self.df.pipe(self._subset_df, split)    
 
     def __len__(self):
         return len(self.split_df)
     
     def __getitem__(self, idx):
         row = self.split_df.iloc[idx]
-        crop_dims = (row["scene_idx"], self.SCENE_SHAPE[0], self.SCENE_SHAPE[1], row["hbeg"], row["hend"], row["wbeg"], row["wend"])
-        image_mask = self._read_image("supervised", *crop_dims) 
-        return *self.common_transform([
-            self.image_transform(image_mask[:, :, :3]),
-            self.target_transform(image_mask[:, :, 3:]),
-        ]), row["df_idx"]
+        with h5py.File(self.root, mode = "r") as f:
+            image_mask = f[row["split"]][idx]
+        image = self.image_transform(image_mask[:, :, :3].copy())
+        mask = self.target_transform(image_mask[:, :, 3:].copy())
+        del image_mask
+        if self.split == "train":
+            image, mask = self.common_transform([image, mask])
+        return image, mask, row["df_idx"]
 
-    def _read_image(self, dataset_name: Literal["supervised", "unsupervised"], idx: int, H:int, W:int, hbeg: int, hend: int, wbeg: int, wend: int):
+    def _readimage(self, dataset_name: Literal["supervised", "unsupervised"], idx: int, H:int, W:int, hbeg: int, hend: int, wbeg: int, wend: int):
         with h5py.File(self.root, mode = "r") as f:
             image = f[dataset_name][idx, hbeg: min(hend, H), wbeg: min(wend, W)]
             if hend > H or wend > W:
                     return pad(image, ((0, max(0, hend - H)), (0, max(0, wend - W)), (0, 0)), "constant", constant_values = 0)
             return image 
-    
-    def __del__(self):
-        if hasattr(self, "file"):
-            self.file.close()
 
 class InriaLitData(StreamingDataset, InriaSegmentation):
     def __init__(

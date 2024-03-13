@@ -62,8 +62,11 @@ class ClassificationTask(LightningModule):
     def __forward__segmentation(self, batch) -> tuple[Tensor, Tensor, Tensor]:
         # NOTE: masks(NCHW).argmax(1) converts one_hot back to categorical, same with preds
         images, masks = batch[0], batch[1]
+        #print(f"Image Batch: {images.shape}, Mask Batch: {masks.shape}", end = ' ')
         preds = self.model(images)
+        #print(f"Preds Batch: {preds.shape}", end = ' ')
         loss = self.criterion(preds, masks)
+        #print(f"Loss: {loss}")
         return preds.argmax(1), masks.argmax(1), loss
     
     def forward(self, batch):
