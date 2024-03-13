@@ -59,27 +59,30 @@ class ClassificationTask(LightningModule):
         loss = self.criterion(preds, labels)
         return preds, labels, loss  
     
+
     def __forward__segmentation(self, batch) -> tuple[Tensor, Tensor, Tensor]:
         # NOTE: masks(NCHW).argmax(1) converts one_hot back to categorical, same with preds
-        images, masks = batch[0], batch[1]
         #print(f"Image Batch: {images.shape}, Mask Batch: {masks.shape}", end = ' ')
-        preds = self.model(images)
         #print(f"Preds Batch: {preds.shape}", end = ' ')
-        loss = self.criterion(preds, masks)
         #print(f"Loss: {loss}")
-        return preds.argmax(1), masks.argmax(1), loss
+        #return preds.argmax(1).detach().cpu(), masks.argmax(1).detach(), loss
+        #loss = self._forward(batch, self.train_metrics)
+        images, masks = batch[0], batch[1]
+        preds = self.model(images)
+        loss = self.criterion(preds, masks)
+        return preds, masks, loss
     
     def forward(self, batch):
         preds, _, _ = self._forward(batch)
         return preds
 
     def training_step(self, batch, batch_idx):
-        preds, labels, loss = self._forward(batch)
-        self.train_metrics.update(preds, labels)
+        preds, masks, loss = self._forward(batch) 
+        self.train_metrics.update(preds, masks)
         self.log(f"train/loss", loss, on_epoch=True, batch_size = self.batch_size);
-        self.log_dict(self.train_metrics, on_epoch=True, on_step=False, batch_size = self.batch_size)
+        self.log_dict(self.train_metrics, on_epoch=True, batch_size = self.batch_size)
         return loss
-    
+
     def validation_step(self, batch, batch_idx):
         preds, labels, loss = self._forward(batch) 
         self.val_losses.append(loss)
@@ -121,12 +124,12 @@ class ClassificationTask(LightningModule):
         metric_params = {
             "task" : "multiclass" if self.num_classes > 2 else "binary",
             "num_classes": self.num_classes,
-            "compute_on_cpu": True,
         }
+
         metrics = MetricCollection({
+            # NOTE: add additional metrics here, eg. 
+            # "cohen_kappa": Metric("cohen_kappa", metric_params),
             monitor_metric: Metric(monitor_metric, metric_params),
-            "cohen_kappa": Metric("cohen_kappa", metric_params),
-            "auroc": Metric("auroc", metric_params)
         })
 
         self.train_metrics = metrics.clone(prefix = "train/")

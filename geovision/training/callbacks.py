@@ -2,21 +2,21 @@ from pathlib import Path
 from attr import validate
 import torch
 from torchmetrics import ConfusionMatrix, Metric
-import wandb
 import numpy as np
 import pandas as pd
 
 from pandas import DataFrame
 from matplotlib import pyplot as plt
-from lightning import Callback, LightningModule, Trainer
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger, WandbLogger
+from pytorch_lightning import Callback
 
 from etl.etl import validate_dir
 from training.evaluation import metrics_dict, plot_report 
-from torchmetrics.functional import jaccard_index, f1_score, dice
+from torchmetrics.functional import jaccard_index, f1_score
 
 from typing import Any, Mapping, Optional, Literal
+from lightning import LightningModule, Trainer
 from numpy.typing import NDArray
 from matplotlib.figure import Figure
 from torch import Tensor
@@ -169,7 +169,7 @@ class EvaluateSegmentation(Callback):
         assert isinstance(inputs, tuple | list), f"expected type(input to eval_step) = list or tuple, got {type(inputs)}"
         assert isinstance(outputs, Tensor), f"expected type(output of eval_step) = Tensor, got {type(outputs)}"
         if len(inputs) > 2:
-            preds, masks, idxs = outputs.detach().cpu(), inputs[1].argmax(1).detach().cpu(), inputs[2].detach().cpu()
+            preds, masks, idxs = outputs.argmax(1).detach().cpu(), inputs[1].argmax(1).detach().cpu(), inputs[2].detach().cpu()
             metric_kwargs = {"task" : "multiclass" if num_classes > 2 else "binary", "num_classes" : num_classes, "average": "macro"}
             for idx, pred, mask in zip(idxs, preds, masks):
                 self.samples["idx"].append(idx.item())
