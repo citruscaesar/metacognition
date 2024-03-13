@@ -1,70 +1,21 @@
 from pathlib import Path
-from attr import validate
-import torch
-from torchmetrics import ConfusionMatrix, Metric
+from torchmetrics import ConfusionMatrix
 import numpy as np
 import pandas as pd
 
-from pandas import DataFrame
-from matplotlib import pyplot as plt
-from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger, WandbLogger
-from pytorch_lightning import Callback
+from lightning.pytorch.callbacks import Callback
 
 from etl.etl import validate_dir
 from training.evaluation import metrics_dict, plot_report 
 from torchmetrics.functional import jaccard_index, f1_score
 
 from typing import Any, Mapping, Optional, Literal
+from torch import Tensor
 from lightning import LightningModule, Trainer
 from numpy.typing import NDArray
 from matplotlib.figure import Figure
-from torch import Tensor
-
-def setup_logger(logs_dir: Path, name: str | int, log_freq: int = 100):
-    logger = CSVLogger(
-       save_dir=logs_dir.parent,
-       name=logs_dir.name,
-       version=name,
-       flush_logs_every_n_steps=log_freq,
-    )
-    print(f"Local Logging To : {logger.log_dir}")
-    return logger
-
-def setup_wandb_logger(logs_dir: Path, name: str | int, log_freq: int = 100):
-    assert name is not None, "experiment name not provided"
-    save_dir = validate_dir(logs_dir, str(name))
-    logger = WandbLogger(
-        project = logs_dir.name,
-        name = str(name),
-        save_dir = save_dir,
-        log_model = True,
-        resume = "auto",
-        save_code = True,
-    )
-    print(f"WandB Logging To: {save_dir/'wandb'}")
-    return logger
-
-def setup_checkpoint(ckpt_dir: Path, metric: str, mode: Literal["min", "max"], save_top_k: int | Literal["all"], **kwargs) -> ModelCheckpoint:
-    monitor_metric = f"val/{metric}";
-    print(f"Monitoring: {monitor_metric}, Checkpoints Saved To: {ckpt_dir}")
-
-    return ModelCheckpoint(
-        dirpath = ckpt_dir,
-        monitor = monitor_metric,
-        mode = mode,
-        #filename = f"{{epoch}}_{{step}}_{{val_{metric}:.3f}}",
-        filename = f"{{epoch}}_{{step}}",
-        save_top_k = -1 if isinstance(save_top_k, str) else save_top_k,
-        save_last = True,
-        save_on_train_epoch_end = False,
-    )
-
-def eval_callback(task: Literal["classification", "segmentation"]):
-    if task == "classification":
-        return EvaluateClassification()
-    else:
-        return EvaluateSegmentation()
+from pandas import DataFrame
 
 class EvaluateClassification(Callback):
     def __init__(self) -> None:

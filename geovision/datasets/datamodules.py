@@ -164,6 +164,7 @@ class ImageDatasetDataModule(LightningDataModule):
             dataset = dataset,
             batch_size = self.batch_size,
             num_workers = 1,
+            persistent_workers = True,
             shuffle = False)
     
     def __streaming_train_dataloader(self, dataset) -> TRAIN_DATALOADERS:

@@ -1,5 +1,4 @@
 # General Purpose Libraries
-from sklearn.metrics import confusion_matrix
 import torch
 from torchmetrics import MetricCollection
 

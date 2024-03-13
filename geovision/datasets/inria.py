@@ -481,6 +481,73 @@ class InriaImageFolder(InriaSegmentation):
             image, mask = self.common_transform([image, mask])
         return image, mask, row["df_idx"]
 
+#class InriaHDF5(InriaSegmentation):
+    #def __init__(
+            #self,
+            #root: Path,
+            #df: Optional[DataFrame] = None,
+            #split: str = "train",
+            #test_split: float = 0.2,
+            #val_split: float = 0.2,
+            #random_seed: int = 42,
+            #tile_size: Optional[tuple[int, int]] = None,
+            #tile_stride: Optional[tuple[int, int]] = None,
+            #image_transform: Optional[Transform] = None,
+            #target_transform: Optional[Transform] = None,
+            #common_transform: Optional[Transform] = None,
+            #**kwargs,
+        #) -> None:
+        #assert root.is_file() and (root.suffix == ".h5" or root.suffix == ".hdf5"), f"{root} does not point to an .h5/.hdf5 file"
+        #assert split in ("train", "val", "test", "unsup", "trainval", "all"), f"provided split [{split}] is invalid"
+        #self.root = root
+        #self.split = split
+        #self.image_transform = image_transform or self.DEFAULT_IMAGE_TRANSFORM
+        #self.target_transform = target_transform or self.DEFAULT_TARGET_TRANSFORM 
+        #self.common_transform = common_transform or self.DEFAULT_COMMON_TRANSFORM 
+
+        #experiment_kwargs = {
+            #"random_seed" : random_seed,
+            #"val_split": val_split,
+            #"test_split": test_split,
+            #"tile_size" : tile_size,
+            #"tile_stride" : tile_stride
+        #}
+
+        #if isinstance(df, DataFrame):
+            #print(f"{split} custom dataset @ [{self.root}]")
+            #self.df = df
+        #elif tile_size is not None and tile_stride is not None:
+            #print(f"{split} tiled dataset @ [{self.root}]")
+            #self.df = self.tiled_df(**experiment_kwargs)
+        #else:
+            #print(f"{split} scene dataset @ [{self.root}]")
+            #self.df = self.scene_df(**experiment_kwargs)
+
+        #assert {"scene_idx", "split", "hbeg", "hend", "wbeg", "wend"}.issubset(self.df.columns), "incorrect dataframe schema"
+        #self.df = self.df.assign(df_idx = lambda df: df.index)
+        #self.split_df = self.df.pipe(self._subset_df, split)    
+
+    #def __len__(self):
+        #return len(self.split_df)
+    
+    #def __getitem__(self, idx):
+        #row = self.split_df.iloc[idx]
+        #with h5py.File(self.root, mode = "r") as f:
+            #image_mask = f[row["split"]][idx]
+        #image = self.image_transform(image_mask[:, :, :3].copy())
+        #mask = self.target_transform(image_mask[:, :, 3:].copy())
+        #del image_mask
+        #if self.split == "train":
+            #image, mask = self.common_transform([image, mask])
+        #return image, mask, row["df_idx"]
+
+    #def _readimage(self, dataset_name: Literal["supervised", "unsupervised"], idx: int, H:int, W:int, hbeg: int, hend: int, wbeg: int, wend: int):
+        #with h5py.File(self.root, mode = "r") as f:
+            #image = f[dataset_name][idx, hbeg: min(hend, H), wbeg: min(wend, W)]
+            #if hend > H or wend > W:
+                    #return pad(image, ((0, max(0, hend - H)), (0, max(0, wend - W)), (0, 0)), "constant", constant_values = 0)
+            #return image 
+
 class InriaHDF5(InriaSegmentation):
     def __init__(
             self,
@@ -529,24 +596,25 @@ class InriaHDF5(InriaSegmentation):
 
     def __len__(self):
         return len(self.split_df)
-    
+        
     def __getitem__(self, idx):
         row = self.split_df.iloc[idx]
+        H, W = self.SCENE_SHAPE[0], self.SCENE_SHAPE[1]
+        hbeg, hend, wbeg, wend = row["hbeg"], row["hend"], row["wbeg"], row["wend"]
         with h5py.File(self.root, mode = "r") as f:
-            image_mask = f[row["split"]][idx]
-        image = self.image_transform(image_mask[:, :, :3].copy())
-        mask = self.target_transform(image_mask[:, :, 3:].copy())
+            image_mask = f["supervised"][row["scene_idx"], hbeg: min(hend, H), wbeg: min(wend, W)] 
+        image = image_mask[:, :, :3].copy()
+        mask = image_mask[:, :, 3:].copy()
         del image_mask
+        if hend > H or wend > W: 
+            image = pad(image, ((0, max(0, hend - H)), (0, max(0, wend - W)), (0, 0)), "constant", constant_values = 0).copy()
+            mask = pad(mask, ((0, max(0, hend - H)), (0, max(0, wend - W)), (0, 0)), "constant", constant_values = 0).copy()
+        image, mask = self.image_transform(image), self.target_transform(mask)
         if self.split == "train":
             image, mask = self.common_transform([image, mask])
         return image, mask, row["df_idx"]
 
-    def _readimage(self, dataset_name: Literal["supervised", "unsupervised"], idx: int, H:int, W:int, hbeg: int, hend: int, wbeg: int, wend: int):
-        with h5py.File(self.root, mode = "r") as f:
-            image = f[dataset_name][idx, hbeg: min(hend, H), wbeg: min(wend, W)]
-            if hend > H or wend > W:
-                    return pad(image, ((0, max(0, hend - H)), (0, max(0, wend - W)), (0, 0)), "constant", constant_values = 0)
-            return image 
+
 
 class InriaLitData(StreamingDataset, InriaSegmentation):
     def __init__(
