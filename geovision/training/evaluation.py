@@ -174,7 +174,6 @@ def plot_checkpoints(logs_dir: Path, monitor_metric:str, ckpt_metric_df: pd.Data
     ax.plot(*get_x_y(ckpt_metric_df, "step", "train/loss"), label = "train/loss", color="skyblue")
     ax.plot(*get_x_y(ckpt_metric_df, "step", "train/loss_epoch"), label = "train/loss_epoch", color="dodgerblue")
     ax.plot(*get_x_y(ckpt_metric_df, "step", "val/loss"), label = "val/loss", color="darkorange", linewidth = 2)
-
     ax.plot(*get_x_y(ckpt_metric_df, "step", f"train/{monitor_metric}"), label = f"train/{monitor_metric}", color = "dodgerblue", linewidth = 1, linestyle = "dotted")
     ax.plot(*get_x_y(ckpt_metric_df, "step", f"val/{monitor_metric}"), label = f"val/{monitor_metric}", color="darkorange", linewidth = 1, linestyle = "dotted")
 
@@ -190,11 +189,8 @@ def plot_checkpoints(logs_dir: Path, monitor_metric:str, ckpt_metric_df: pd.Data
     ax.set_yticks(np.arange(0, y_end, 0.1))
 
     _, x_end = ax.get_xlim()
-    ax.set_xticks(np.arange(0, x_end, 200))
-
     epoch_ticks = ckpt_metric_df.groupby("epoch")["step"].max().tolist()
-    epoch_axis = ax.secondary_xaxis(location=1)
-    epoch_axis.set_xticks(epoch_ticks, labels = [f"{x}" for x in range(len(epoch_ticks))])
+    ax.set_xticks(epoch_ticks, labels = [f"{x}" for x in range(len(epoch_ticks))])
 
     ckpt_ticks = ckpt_metric_df[["step", "ckpt_path"]].dropna().iloc[:, 0].tolist()
     ckpt_axis = ax.secondary_xaxis(location=0)

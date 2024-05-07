@@ -79,6 +79,7 @@ class ClassificationTask(LightningModule):
         preds, masks, loss = self._forward(batch) 
         self.train_metrics.update(preds, masks)
         self.log(f"train/loss", loss, on_epoch=True, batch_size = self.batch_size);
+        self.log("lr", self.optimizer_params["lr"], on_step = True, on_epoch=True)
         self.log_dict(self.train_metrics, on_epoch=True, batch_size = self.batch_size)
         return loss
 

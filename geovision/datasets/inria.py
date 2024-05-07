@@ -1,4 +1,7 @@
-import os, shutil, h5py, zipfile
+import os
+import shutil
+import h5py
+import zipfile
 from pathlib import Path
 from pandas import DataFrame, concat
 from torch import Tensor, float32
@@ -54,6 +57,18 @@ class InriaSegmentation(Dataset):
 
     @classmethod
     def scene_df(cls, val_split: float = 0.2, test_split: float = 0.2, random_seed: int = 42, **kwargs) -> DataFrame:
+        r"""
+        Parameters
+        ----------
+        random_seed: int 
+            used to randomly sample dataset to generate train-val-test splits
+        test_split: float, between [0, 1]
+            proportion of dataset to use as test data
+        val_split: float, between [0, 1]
+            proportion of dataset to use as validation data
+        **kwargs: dict[str, Any]
+            for when user feels lazy
+        """
         return (
             concat([cls.supervised_df(val_split, test_split, random_seed), cls.unsupervised_df()])
             .assign(hbeg = 0).assign(hend = 5000).assign(wbeg = 0).assign(wend = 5000)
@@ -65,7 +80,30 @@ class InriaSegmentation(Dataset):
         )
                                      
     @classmethod
-    def tiled_df(cls, val_split: float, test_split: float, random_seed: int, tile_size: tuple[int, int], tile_stride: tuple[int, int], **kwargs) -> DataFrame:
+    def tiled_df(
+            cls, 
+            random_seed: int,
+            test_split: float,
+            val_split: float,
+            tile_size: tuple[int, int],
+            tile_stride: tuple[int, int],
+            **kwargs) -> DataFrame:
+        r"""
+        Parameters
+        ----------
+        random_seed: int 
+            used to randomly sample dataset to generate train-val-test splits
+        test_split: float, between [0, 1]
+            proportion of dataset to use as test data
+        val_split: float, between [0, 1]
+            proportion of dataset to use as validation data
+        tile_size: tuple[int, int]
+            size (x, y) of the sliding window (kernel) used to draw samples 
+        tile_stride: tuple[int, int] 
+            stride (x, y) of the sliding window (kernel) used to draw samples 
+        **kwargs: dict[str, Any]
+            for when user feels lazy
+        """
         assert isinstance(tile_size, tuple) and len(tile_size) == 2, "Invalid Tile Size"
         assert isinstance(tile_stride, tuple) and len(tile_stride) == 2, "Invalid Tile Stride"
 
