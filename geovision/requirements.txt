@@ -1,6 +1,5 @@
-torch==2.2.1
-torchvision==0.17.1
 torchgeo==0.5.2
+geopandas
 captum==0.7.0
 lightning==2.2.1
 litdata==0.2.2
@@ -14,3 +13,5 @@ h5py==3.10.0
 wandb==0.16.4
 python-dotenv==1.0.0
 s5cmd
+ipykernel
+ipympl
